@@ -1200,6 +1200,7 @@ class MTurkAgent(Agent):
     def wait_for_hit_completion(self, timeout=None): # Timeout in seconds, after which the HIT will be expired automatically
         if timeout:
             start_time = time.time()
+        waiting_log_printed = True
         while self.manager.get_agent_work_status(assignment_id=self.assignment_id) != ASSIGNMENT_DONE:
             # Check if the Turker already returned the HIT
             if self.hit_is_returned:
@@ -1210,10 +1211,14 @@ class MTurkAgent(Agent):
                     print_and_log("Timed out waiting for Turker to complete the HIT.")
                     self.set_hit_is_abandoned()
                     return False
-            print_and_log("Waiting for Turker to complete the HIT...", False)
+            if waiting_log_printed:
+               print_and_log("Waiting for {} to complete the HIT in conversation {}...".format(self.id, self.conversation_id), False)
+               print_and_log("{event}: Worker_id: {}, Assignment_id: {}".format(self.worker_id, self.assignment_id, event='wait for completing HIT'), False)
+               waiting_log_printed = False
             status = self.manager.get_agent_work_status(assignment_id=self.assignment_id)
             time.sleep(2)
         print_and_log('Conversation ID: ' + str(self.conversation_id) + ', Agent ID: ' + self.id + ' - HIT is done.')
+        print_and_log("{event}: Worker_id: {}, Assignment_id: {}".format(self.worker_id, self.assignment_id, event='HIT Done'), False)
         return True
 
     def shutdown(self, timeout=None, direct_submit=False): # Timeout in seconds, after which the HIT will be expired automatically
