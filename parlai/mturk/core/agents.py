@@ -191,7 +191,7 @@ class SocketManager():
             connection_id = sender_id + '_' + assignment_id
             if packet_type == TYPE_ACK:
                 # Acknowledgements should mark a packet as acknowledged
-                print_and_log("On new ack: " + str(args), False)
+                #print_and_log("On new ack: " + str(args), False)
                 self.packet_map[packet_id].status = STATUS_ACK
                 # If the packet sender wanted to do something on acknowledge
                 if self.packet_map[packet_id].ack_func:
@@ -212,7 +212,7 @@ class SocketManager():
                 self.socketIO.emit('route packet', packet, None)
             else:
                 # Remaining packet types need to be acknowledged
-                print_and_log("On new message: " + str(args), False)
+                #print_and_log("On new message: " + str(args), False)
                 ack = {
                     'id': packet_id,
                     'type': TYPE_ACK,
@@ -285,7 +285,7 @@ class SocketManager():
                             }
 
                             # send the packet
-                            print_and_log("Send packet: " + str(packet.data))
+                            #print_and_log("Send packet: " + str(packet.data))
                             def set_status_to_sent(data):
                                 packet.status = STATUS_SENT
                             self.socketIO.emit(
@@ -360,12 +360,12 @@ class SocketManager():
         connection_id = packet.receiver_id + '_' + packet.assignment_id
         if not self.socket_is_open(connection_id):
             # Warn if there is no socket to send through for the expected recip
-            print_and_log('Can not send packet to worker_id ' + \
-                '{}: packet queue not found. Message: {}'.format(
-                    connection_id, packet.data))
+            #print_and_log('Can not send packet to worker_id ' + \
+            #    '{}: packet queue not found. Message: {}'.format(
+            #        connection_id, packet.data))
             return
-        print_and_log('Put packet (' + packet.id + ') in queue (' + \
-            connection_id + ')', False)
+        #print_and_log('Put packet (' + packet.id + ') in queue (' + \
+        #    connection_id + ')', False)
         # Get the current time to put packet into the priority queue
         self.packet_map[packet.id] = packet
         item = (time.time(), packet)
@@ -400,6 +400,8 @@ class MTurkManager():
         self.worker_state = {}
         self.socket_manager = None
         self.conv_to_agent = {}
+        self.assignments_list = []
+        self.agent_index = 0
 
 
     def setup_server(self, task_directory_path=None):
@@ -557,6 +559,10 @@ class MTurkManager():
             self.wait_for_status(assign_state, ASSIGN_STATUS_WAITING)
 
             with self.worker_pool_change_condition:
+                if not assignment_id in self.assignments_list:
+                    self.agent_index += 1
+                    print_and_log("************ PLEASE CHECK: {}/{} agent is onboarded. ************".format(self.agent_index, 2*self.opt['num_conversations']), False)
+                    self.assignments_list.append(assignment_id)
                 if not mturk_agent.hit_is_returned:
                     print("Adding worker to pool...")
                     self.worker_pool.append(mturk_agent)
@@ -652,14 +658,14 @@ class MTurkManager():
                     self.task_threads.append(task_thread)
 
                     # Once we've had enough conversations, finish and break
-                    if self.conversation_index == self.opt['num_conversations']:
-                        self.expire_all_unassigned_hits()
+                    #if self.conversation_index == self.opt['num_conversations']:
+                    #    self.expire_all_unassigned_hits()
 
-                        # Wait for all conversations to finish, then break from
-                        # the while loop
-                        for thread in self.task_threads:
-                            thread.join()
-                        break
+                    #    # Wait for all conversations to finish, then break from
+                    #    # the while loop
+                    #    for thread in self.task_threads:
+                    #        thread.join()
+                    #    break
             time.sleep(0.3)
 
 
@@ -674,7 +680,7 @@ class MTurkManager():
         """Handler for updating MTurkManager's state when a worker sends an
         alive packet. This asks the socket manager to open a new channel and
         then handles ensuring the worker state is consistent"""
-        print_and_log("on_agent_alive: " + str(pkt), False)
+        #print_and_log("on_agent_alive: " + str(pkt), False)
         worker_id = pkt['data']['worker_id']
         hit_id = pkt['data']['hit_id']
         assign_id = pkt['data']['assignment_id']
@@ -735,8 +741,8 @@ class MTurkManager():
             worker_id, assignment_id))
         self.worker_state[worker_id].disconnects += 1
         # TODO Block worker if disconnects exceed some amount
-
         agent = self.mturk_agents[worker_id][assignment_id]
+        print_and_log("Converasation {}: {} disconnected.".format(agent.conversation_id, agent.id))
         assignments = self.worker_state[worker_id].assignments
         status = assignments[assignment_id].status
         if status == ASSIGN_STATUS_NONE:
@@ -759,6 +765,7 @@ class MTurkManager():
             # in conversation, inform world about disconnect
             conversation_id = assignments[assignment_id].conversation_id
             if agent in self.conv_to_agent[conversation_id]:
+                agent.set_hit_is_abandoned()
                 for other_agent in self.conv_to_agent[conversation_id]:
                     if agent.id != other_agent.id:
                         # TODO this should be handled more cleanly
@@ -789,6 +796,8 @@ class MTurkManager():
         # TODO Attempt to notify worker they have disconnected before the below
         # close the sending thread
         self.socket_manager.close_channel(worker_id, assignment_id)
+        if status == ASSIGN_STATUS_IN_TASK:
+            agent.disconnect_channel_closed = True
 
 
     def send_through_socket(self, sender_id, receiver_id, assignment_id, data,
@@ -1016,7 +1025,7 @@ class MTurkManager():
         # unique_request_token may be useful for handling future network errors
         client.send_bonus(
             WorkerId=worker_id,
-            BonusAmount=bonus_amount,
+            BonusAmount=str(bonus_amount),
             AssignmentId=assignment_id,
             Reason=reason,
             UniqueRequestToken=unique_request_token
@@ -1054,7 +1063,8 @@ class MTurkManager():
         for worker in workers:
             worker_id = worker.worker_id
             assign_id = worker.assignment_id
-            self.socket_manager.close_channel(worker_id, assign_id)
+            if not hasattr(worker, 'disconnect_channel_closed'):
+                self.socket_manager.close_channel(worker_id, assign_id)
             del self.worker_state[worker_id].assignments[assign_id]
 
 
@@ -1185,7 +1195,9 @@ class MTurkAgent(Agent):
             if timeout:
                 current_time = time.time()
                 if (current_time - start_time) > timeout:
-                    print_and_log(self.id+' is timeout.', False)
+                    print_and_log('conversation {}: {} is timeout.'.format( \
+                        (self.conversation_id if self.conversation_id != None else 'CONVO_NONE'), \
+                        (self.id if self.id != None else 'AGENT_NONE'), False))
                     self.set_hit_is_abandoned()
                     msg = {
                         'id': self.id,
@@ -1272,7 +1284,7 @@ class MTurkAgent(Agent):
                 unique_request_token = str(uuid.uuid4())
                 if self.manager.pay_bonus(
                     worker_id=self.worker_id,
-                    bonus_amount=str(bonus_amount),
+                    bonus_amount=bonus_amount,
                     assignment_id=self.assignment_id,
                     reason=reason,
                     unique_request_token=unique_request_token
