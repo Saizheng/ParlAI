@@ -84,7 +84,7 @@ DEF_SOCKET_TIMEOUT = 8
 
 logging_enabled = True
 logger = None
-debug = True
+debug = False
 
 if logging_enabled:
     logging.basicConfig(
@@ -398,7 +398,7 @@ class SocketManager():
                             pkt = packet.as_dict()
 
                             # send the packet
-                            print_and_log("Send packet: " + str(packet.data))
+                            print_and_log("Send packet: " + str(packet.data), False)
                             def set_status_to_sent(data):
                                 packet.status = STATUS_SENT
                             self.socketIO.emit(
@@ -513,6 +513,7 @@ class MTurkManager():
         self.worker_state = {}
         self.socket_manager = None
         self.conv_to_agent = {}
+        self.num_hits_approved = 0
 
 
     def setup_server(self, task_directory_path=None):
@@ -940,7 +941,7 @@ class MTurkManager():
                     other_assignments = \
                         self.worker_state[other_agent.worker_id].assignments
                     other_assignments[other_agent.assignment_id].status = \
-                        ASSIGN_STATUS_PARTNET_DISCONNECT
+                        ASSIGN_STATUS_PARTNER_DISCONNECT
         elif (status == ASSIGN_STATUS_DONE or
               status == ASSIGN_STATUS_EXPIRED or
               status == ASSIGN_STATUS_DISCONNECT or
@@ -1397,6 +1398,10 @@ class MTurkAgent(Agent):
                 self.manager.approve_work(assignment_id=self.assignment_id)
                 print_and_log('Conversation ID: ' + str(self.conversation_id) +\
                               ', Agent ID: ' + self.id + ' - HIT is approved.')
+                self.manager.num_hits_approved += 1
+                print('******************************************************************************')
+                print('{}/{} HITs approved. Agent worker_id: {}'.format(self.manager.num_hits_approved, self.manager.opt['num_conversations'], self.worker_id))
+                print('******************************************************************************')
             else:
                 print_and_log("Cannot approve HIT. Reason: Turker hasn't " + \
                               "completed the HIT yet.")
@@ -1480,6 +1485,11 @@ class MTurkAgent(Agent):
         # Timeout in seconds, after which the HIT will be expired automatically
         if timeout:
             start_time = time.time()
+
+        print_and_log('Waiting for ({})_({}) to complete {}...'.format(
+            self.worker_id, self.assignment_id, self.conversation_id
+        ), False)
+
         while self.manager.get_agent_work_status(self.assignment_id) != \
                 ASSIGNMENT_DONE:
             # Check if the Turker already returned the HIT
@@ -1491,9 +1501,6 @@ class MTurkAgent(Agent):
                     print_and_log("Timeout waiting for Turker to complete HIT.")
                     self.set_hit_is_abandoned()
                     return False
-            print_and_log('Waiting for ({})_({}) to complete {}...'.format(
-                self.worker_id, self.assignment_id, self.conversation_id
-            ), False)
             time.sleep(2)
         print_and_log('Conversation ID: ' + str(self.conversation_id) + \
                       ', Agent ID: ' + self.id + ' - HIT is done.')
