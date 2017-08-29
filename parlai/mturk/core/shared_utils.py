@@ -16,7 +16,7 @@ THREAD_MTURK_POLLING_SLEEP = 10
 
 logging_enabled = True
 logger = None
-debug = True
+debug = False
 
 if logging_enabled:
     logging.basicConfig(

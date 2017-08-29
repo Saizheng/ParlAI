@@ -222,7 +222,7 @@ class SocketManager():
         """Sends a packet, blocks if the packet is blocking"""
         # Send the packet
         pkt = packet.as_dict()
-        print_and_log("Send packet: " + str(packet.data))
+        print_and_log("Send packet: " + str(packet.data), False)
         def set_status_to_sent(data):
             packet.status = Packet.STATUS_SENT
         self.socketIO.emit(

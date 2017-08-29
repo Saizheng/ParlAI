@@ -361,6 +361,10 @@ class MTurkManager():
             # TODO kill onboarding world's thread
         elif status == AssignState.STATUS_WAITING:
             # agent is in pool, remove from pool and delete
+            agent.persona_generator.push_persona(gent.persona_dix)
+            agent.persona_generator.save_idx_stack()
+            print ("\n******* Push persona {} back to stack. *******\n".format(agent.persona_idx))
+            #print(agent.persona_generator.idx_stack) 
             if agent in self.worker_pool:
                 with self.worker_pool_change_condition:
                     self.worker_pool.remove(agent)
@@ -514,7 +518,7 @@ class MTurkManager():
             )
         self.task_files_to_copy.append(
             os.path.join(task_directory_path, 'html', 'cover_page.html'))
-        for mturk_agent_id in self.mturk_agent_ids:
+        for mturk_agent_id in self.mturk_agent_ids + ['onboarding']:
             self.task_files_to_copy.append(os.path.join(
                 task_directory_path,
                 'html',
