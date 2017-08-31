@@ -5,8 +5,8 @@
 # of patent rights can be found in the PATENTS file in the same directory.
 
 import logging
-import uuid
 import time
+import uuid
 
 # Sleep constants
 THREAD_SHORT_SLEEP = 0.1
@@ -37,5 +37,5 @@ def print_and_log(message, should_print=True):
 
 
 def generate_event_id(worker_id):
-    """Creates a unique id to use for identifying a packet"""
-    return worker_id + '_' + str(uuid.uuid4())
+    """Return a unique id to use for identifying a packet for a worker"""
+    return '{}_{}'.format(worker_id, uuid.uuid4())
