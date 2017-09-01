@@ -14,7 +14,7 @@ import uuid
 from botocore.exceptions import ClientError
 from datetime import datetime
 
-from parlai.mturk.core.server_utils import setup_server
+from parlai.mturk.core.server_utils import setup_server, delete_server
 from parlai.mturk.core.mturk_utils import calculate_mturk_cost, \
     check_mturk_balance, create_hit_type, create_hit_with_hit_type, \
     get_mturk_client, setup_aws_credentials, create_hit_config
@@ -183,13 +183,18 @@ class MTurkManager():
             self.worker_pool.append(self.mturk_agents[worker_id][assignment_id])
 
     def _move_workers_to_waiting(self, workers):
-        """Puts all workers into waiting worlds, expires them if no longer
-        accepting workers"""
+        """Put all workers into waiting worlds, expire them if no longer
+        accepting workers. If the worker is already final, delete it
+        """
         for worker in workers:
             worker_id = worker.worker_id
             assignment_id = worker.assignment_id
             assignment = \
                 self.worker_state[worker_id].assignments[assignment_id]
+            if assignment.is_final():
+                #This worker must've disconnected or expired, remove them
+                del worker
+                continue
             conversation_id = 'w_{}'.format(uuid.uuid4())
 
             if self.accepting_workers:
@@ -421,10 +426,9 @@ class MTurkManager():
             assignments[assignment_id].status = AssignState.STATUS_DISCONNECT
             del agent
         elif status == AssignState.STATUS_ONBOARDING:
-            # Agent never made it to task pool, kill the onboarding thread
+            # Agent never made it to task pool, the onboarding thread will die
+            # and delete the agent if we mark it as a disconnect
             assignments[assignment_id].status = AssignState.STATUS_DISCONNECT
-            self.assignment_to_onboard_thread[assignment_id].terminate()
-            del agent
         elif status == AssignState.STATUS_WAITING:
             # agent is in pool, remove from pool and delete
             agent.persona_generator.push_persona(agent.persona_idx)
@@ -613,8 +617,13 @@ class MTurkManager():
                 'html',
                 '{}_index.html'.format(mturk_agent_id)
             ))
-        # Setup the server
-        self.server_url = setup_server(self.task_files_to_copy)
+
+        # Setup the server with a likely-unique app-name
+        task_name = '{}-{}'.format(str(uuid.uuid4())[:8], self.opt['task'])
+        self.server_task_name = \
+            ''.join(e for e in task_name if e.isalnum() or e == '-')
+        self.server_url = \
+            setup_server(self.server_task_name, self.task_files_to_copy)
         print_and_log(self.server_url, False)
 
         print_and_log("MTurk server setup done.\n")
@@ -733,7 +742,7 @@ class MTurkManager():
         for assignment_id in self.assignment_to_onboard_thread:
             self.assignment_to_onboard_thread[assignment_id].join()
         self._save_disconnects()
-
+        delete_server(self.server_task_name)
 
     ### MTurk Agent Interaction Functions ###
 
