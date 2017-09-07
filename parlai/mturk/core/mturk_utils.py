@@ -243,7 +243,8 @@ def create_hit_with_hit_type(page_url, hit_type_id, num_assignments,
     response = client.create_hit_with_hit_type(
         HITTypeId=hit_type_id,
         MaxAssignments=num_assignments,
-        LifetimeInSeconds=31536000,
+        #LifetimeInSeconds=31536000,
+        LifetimeInSeconds=24*3600,
         Question=question_data_struture,
         # AssignmentReviewPolicy={
         #     'PolicyName': 'string',

@@ -432,7 +432,6 @@ class MTurkManager():
         elif status == AssignState.STATUS_WAITING:
             # agent is in pool, remove from pool and delete
             agent.persona_generator.push_persona(agent.persona_idx)
-            agent.persona_generator.save_idx_stack()
             print ("\n******* Push persona {} back to stack. *******\n".format(agent.persona_idx))
             #print(agent.persona_generator.idx_stack) 
             if agent in self.worker_pool:
