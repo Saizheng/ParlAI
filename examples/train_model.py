@@ -50,12 +50,17 @@ def run_eval(agent, opt, datatype, max_exs=-1, write_log=False, valid_world=None
     else:
         valid_world.reset()
     cnt = 0
+    import time
+    t_start = time.time()
     for _ in valid_world:
         valid_world.parley()
         if cnt == 0 and opt['display_examples']:
             print(valid_world.display() + '\n~~')
             print(valid_world.report())
         cnt += opt['batchsize']
+        if cnt % 200 == 0:
+            t_end = time.time()
+            print('{}/{}, time since start: {} sec.'.format(cnt, len(valid_world), t_end - t_start))
         if valid_world.epoch_done() or (max_exs > 0 and cnt > max_exs):
             # note this max_exs is approximate--some batches won't always be
             # full depending on the structure of the data
@@ -100,6 +105,7 @@ def main():
     train.add_argument('-dbf', '--dict-build-first',
                         type='bool', default=True,
                         help='build dictionary first before training agent')
+    train.add_argument('--only_eval', action='store_true', help='only do evaluation')
     opt = parser.parse_args()
     # Possibly build a dictionary (not all models do this).
     if opt['dict_build_first'] and 'dict_file' in opt:
@@ -123,85 +129,89 @@ def main():
     impatience = 0
     saved = False
     valid_world = None
-    while True:
-        world.parley()
-        parleys += 1
 
-        if opt['num_epochs'] > 0 and parleys >= max_parleys:
-            print('[ num_epochs completed: {} ]'.format(opt['num_epochs']))
-            break
-        if opt['max_train_time'] > 0 and train_time.time() > opt['max_train_time']:
-            print('[ max_train_time elapsed: {} ]'.format(train_time.time()))
-            break
-        if opt['log_every_n_secs'] > 0 and log_time.time() > opt['log_every_n_secs']:
-            if opt['display_examples']:
-                print(world.display() + '\n~~')
+    only_eval = opt['only_eval']
+    if not only_eval:
+        while True:
+            world.parley()
+            parleys += 1
 
-            logs = []
-            # time elapsed
-            logs.append('time:{}s'.format(math.floor(train_time.time())))
-            logs.append('parleys:{}'.format(parleys))
-
-            # get report and update total examples seen so far
-            if hasattr(agent, 'report'):
-                train_report = agent.report()
-                agent.reset_metrics()
-            else:
-                train_report = world.report()
-                world.reset_metrics()
-
-            if hasattr(train_report, 'get') and train_report.get('total'):
-                total_exs += train_report['total']
-                logs.append('total_exs:{}'.format(total_exs))
-
-            # check if we should log amount of time remaining
-            time_left = None
-            if opt['num_epochs'] > 0:
-                exs_per_sec = train_time.time() / total_exs
-                time_left = (max_exs - total_exs) * exs_per_sec
-            if opt['max_train_time'] > 0:
-                other_time_left = opt['max_train_time'] - train_time.time()
-                if time_left is not None:
-                    time_left = min(time_left, other_time_left)
-                else:
-                    time_left = other_time_left
-            if time_left is not None:
-                logs.append('time_left:{}s'.format(math.floor(time_left)))
-
-            # join log string and add full metrics report to end of log
-            log = '[ {} ] {}'.format(' '.join(logs), train_report)
-
-            print(log)
-            log_time.reset()
-
-        if (opt['validation_every_n_secs'] > 0 and
-                validate_time.time() > opt['validation_every_n_secs']):
-            valid_report, valid_world = run_eval(agent, opt, 'valid', opt['validation_max_exs'], valid_world=valid_world)
-            if valid_report['accuracy'] > best_accuracy:
-                best_accuracy = valid_report['accuracy']
-                impatience = 0
-                print('[ new best accuracy: ' + str(best_accuracy) + ' ]')
-                world.save_agents()
-                saved = True
-                if best_accuracy == 1:
-                    print('[ task solved! stopping. ]')
-                    break
-            else:
-                impatience += 1
-                print('[ did not beat best accuracy: {} impatience: {} ]'.format(
-                        round(best_accuracy, 4), impatience))
-            validate_time.reset()
-            if opt['validation_patience'] > 0 and impatience >= opt['validation_patience']:
-                print('[ ran out of patience! stopping training. ]')
+            if opt['num_epochs'] > 0 and parleys >= max_parleys:
+                print('[ num_epochs completed: {} ]'.format(opt['num_epochs']))
                 break
-    world.shutdown()
-    if not saved:
-        world.save_agents()
-    else:
-        # reload best validation model
-        agent = create_agent(opt)
+            if opt['max_train_time'] > 0 and train_time.time() > opt['max_train_time']:
+                print('[ max_train_time elapsed: {} ]'.format(train_time.time()))
+                break
+            if opt['log_every_n_secs'] > 0 and log_time.time() > opt['log_every_n_secs']:
+                if opt['display_examples']:
+                    print(world.display() + '\n~~')
 
-    run_eval(agent, opt, 'valid', write_log=True)
+                logs = []
+                # time elapsed
+                logs.append('time:{}s'.format(math.floor(train_time.time())))
+                logs.append('parleys:{}'.format(parleys))
+
+                # get report and update total examples seen so far
+                if hasattr(agent, 'report'):
+                    train_report = agent.report()
+                    agent.reset_metrics()
+                else:
+                    train_report = world.report()
+
+                    world.reset_metrics()
+
+                if hasattr(train_report, 'get') and train_report.get('total'):
+                    total_exs += train_report['total']
+                    logs.append('total_exs:{}'.format(total_exs))
+
+                # check if we should log amount of time remaining
+                time_left = None
+                if opt['num_epochs'] > 0:
+                    exs_per_sec = train_time.time() / total_exs
+                    time_left = (max_exs - total_exs) * exs_per_sec
+                if opt['max_train_time'] > 0:
+                    other_time_left = opt['max_train_time'] - train_time.time()
+                    if time_left is not None:
+                        time_left = min(time_left, other_time_left)
+                    else:
+                        time_left = other_time_left
+                if time_left is not None:
+                    logs.append('time_left:{}s'.format(math.floor(time_left)))
+
+                # join log string and add full metrics report to end of log
+                log = '[ {} ] {}'.format(' '.join(logs), train_report)
+
+                print(log)
+                log_time.reset()
+
+            if (opt['validation_every_n_secs'] > 0 and
+                    validate_time.time() > opt['validation_every_n_secs']):
+                valid_report, valid_world = run_eval(agent, opt, 'valid', opt['validation_max_exs'], valid_world=valid_world)
+                if valid_report['accuracy'] > best_accuracy:
+                    best_accuracy = valid_report['accuracy']
+                    impatience = 0
+                    print('[ new best accuracy: ' + str(best_accuracy) + ' ]')
+                    world.save_agents()
+                    saved = True
+                    if best_accuracy == 1:
+                        print('[ task solved! stopping. ]')
+                        break
+                else:
+                    impatience += 1
+                    print('[ did not beat best accuracy: {} impatience: {} ]'.format(
+                            round(best_accuracy, 4), impatience))
+                validate_time.reset()
+                if opt['validation_patience'] > 0 and impatience >= opt['validation_patience']:
+                    print('[ ran out of patience! stopping training. ]')
+                    break
+        world.shutdown()
+        if not saved:
+            world.save_agents()
+        else:
+            # reload best validation model
+            agent = create_agent(opt)
+
+    #run_eval(agent, opt, 'valid', write_log=True)
     run_eval(agent, opt, 'test', write_log=True)
 
 

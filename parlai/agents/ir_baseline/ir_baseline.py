@@ -66,7 +66,8 @@ def score_match(query_rep, text, length_penalty, debug=False):
     used = {}
     for w in words:
         if w in rw and w not in used:
-            score += 1
+            #score += 1
+            score += rw[w]
             if debug:
                 print("match: " + w)
         used[w] = True
@@ -109,6 +110,7 @@ class IrBaselineAgent(Agent):
         self.id = 'IRBaselineAgent'
         self.length_penalty = float(opt['length_penalty'])
         self.dictionary = DictionaryAgent(opt)
+        self.nwords_dict = sum(self.dictionary.freqs().values())
         self.opt = opt
 
     def observe(self, obs):
@@ -147,12 +149,16 @@ class IrBaselineAgent(Agent):
         """ Build representation of query, e.g. words or n-grams """
         rep = {}
         rep['words'] = {}
-        words = query.lower().split(' ')
+        #words = query.lower().split(' ')
+        words = [w for w in self.dictionary.tokenize(query)]
         rw = rep['words']
         used = {}
         for w in words:
             if len(self.dictionary.freqs()) > 0:
+                if w not in self.dictionary.freqs():
+                    print(w, len(w))
                 rw[w] = 1.0 / (1.0 + math.log(1.0 + self.dictionary.freqs()[w]))
+                #rw[w] = math.log(1.0 + self.nwords_dict/self.dictionary.freqs()[w])
             else:
                 if w not in stopwords:
                     rw[w] = 1
