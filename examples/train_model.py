@@ -176,6 +176,8 @@ def main():
             log = '[ {} ] {}'.format(' '.join(logs), train_report)
 
             print(log)
+            if hasattr(world, 'world'): 
+                world.world.agents[1].report_loss()
             log_time.reset()
 
         if (opt['validation_every_n_secs'] > 0 and
