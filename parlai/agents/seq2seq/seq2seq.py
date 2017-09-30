@@ -44,13 +44,13 @@ class Seq2seqAgent(Agent):
         """Add command-line arguments specifically for this agent."""
         DictionaryAgent.add_cmdline_args(argparser)
         agent = argparser.add_argument_group('Seq2Seq Arguments')
-        agent.add_argument('-hs', '--hiddensize', type=int, default=128,
+        agent.add_argument('-hs', '--hiddensize', type=int, default=256,
                            help='size of the hidden layers')
-        agent.add_argument('-emb', '--embeddingsize', type=int, default=128,
+        agent.add_argument('-emb', '--embeddingsize', type=int, default=256,
                            help='size of the token embeddings')
         agent.add_argument('-nl', '--numlayers', type=int, default=2,
                            help='number of hidden layers')
-        agent.add_argument('-lr', '--learningrate', type=float, default=1e-2,
+        agent.add_argument('-lr', '--learningrate', type=float, default=1e-3,
                            help='learning rate')
         agent.add_argument('-dr', '--dropout', type=float, default=0.1,
                            help='dropout rate')
@@ -154,7 +154,7 @@ class Seq2seqAgent(Agent):
             # lookup table stores word embeddings
             self.lt = nn.Embedding(len(self.dict), emb,
                                    padding_idx=self.NULL_IDX,
-                                   scale_grad_by_freq=True)
+                                   scale_grad_by_freq=False)
             # encoder captures the input text
             enc_class = Seq2seqAgent.ENC_OPTS[opt['encoder']]
             self.encoder = enc_class(hsz, hsz, opt['numlayers'])
@@ -489,9 +489,9 @@ class Seq2seqAgent(Agent):
                     self.cand_lengths.resize_(cview.size(0)).fill_(0))
 
         for i in range(cview.size(1)):
-            output = self._apply_attention(xes, encoder_output, hidden, attn_mask) if (self.attention and not self.attention.endswith('post')) else xes
-            output, hidden = self.decoder(output, hidden)
-            output = self._apply_attention(output, encoder_output, hidden, attn_mask) if (self.attention and self.attention.endswith('post')) else output
+            output = self._apply_attention(cands_xes, encoder_output, cands_hn, attn_mask) if (self.attention and not self.attention.endswith('post')) else cands_xes
+            output, cands_hn = self.decoder(output, cands_hn)
+            output = self._apply_attention(output, encoder_output, cands_hn, attn_mask) if (self.attention and self.attention.endswith('post')) else output
 
             preds, scores = self.hidden_to_idx(output, dropout=False)
             cs = cview.select(1, i)
@@ -499,7 +499,7 @@ class Seq2seqAgent(Agent):
             cand_lengths += non_nulls.long()
             score_per_cand = torch.gather(scores, 1, cs.unsqueeze(1))
             cand_scores += score_per_cand.squeeze() * non_nulls.float()
-            cands_xes = self.lt2dec(self.lt(cs).unsqueeze(0))
+            cands_xes = self.lt(cs).unsqueeze(0)
 
         # set empty scores to -1, so when divided by 0 they become -inf
         cand_scores -= cand_lengths.eq(0).float()
@@ -548,7 +548,7 @@ class Seq2seqAgent(Agent):
     def batchify(self, observations):
         """Convert a list of observations into input & target tensors."""
         # valid examples
-        exs = [ex for ex in observations if 'text' in ex]
+        exs = [ex for ex in observations if ('text' in ex and ('labels' in ex or 'label_candidates' in ex))]
         # the indices of the valid (non-empty) tensors
         valid_inds = [i for i, ex in enumerate(observations) if 'text' in ex]
 
@@ -620,6 +620,13 @@ class Seq2seqAgent(Agent):
                     cs = list(observations[i]['label_candidates'])
                     parsed.append([self.parse(c) for c in cs])
                     valid_cands.append((i, cs))
+          
+            # to guarantee that the shape consistency between xs and cands, when some xs
+            # does not have cands. TODO: Saizheng
+            #valid_cand_inds = [c[0] for c in valid_cands]
+            #if len(valid_cand_inds) > 0:
+            #    xs = xs[valid_cand_inds,:]
+
             if len(parsed) > 0:
                 # TODO: store lengths of cands separately, so don't have zero
                 # padding for varying number of cands per example
@@ -657,7 +664,6 @@ class Seq2seqAgent(Agent):
             return batch_reply
 
         # produce predictions either way, but use the targets if available
-
         predictions, text_cand_inds = self.predict(xs, ys, cands)
 
         for i in range(len(predictions)):
@@ -728,6 +734,6 @@ class Seq2seqAgent(Agent):
         self.longest_label = states['longest_label']
 
     def report_loss(self):
-        print("The loss is {}".format(self.loss/self.loss_c))
+        print("The loss is {}".format(self.loss/(self.loss_c+1e-10)))
         self.loss = 0.0
         self.loss_c = 0 

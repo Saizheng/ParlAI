@@ -29,6 +29,7 @@ from parlai.core.params import ParlaiParser
 from parlai.core.utils import Timer
 import build_dict
 import math
+import pdb
 
 def run_eval(agent, opt, datatype, max_exs=-1, write_log=False, valid_world=None):
     """Eval on validation/test data.
@@ -62,7 +63,6 @@ def run_eval(agent, opt, datatype, max_exs=-1, write_log=False, valid_world=None
             # full depending on the structure of the data
             break
     valid_report = valid_world.report()
-
     metrics = datatype + ':' + str(valid_report)
     print(metrics)
     if write_log and opt['model_file']:
@@ -70,7 +70,6 @@ def run_eval(agent, opt, datatype, max_exs=-1, write_log=False, valid_world=None
         f = open(opt['model_file'] + '.' + datatype, 'a+')
         f.write(metrics + '\n')
         f.close()
-
     return valid_report, valid_world
 
 
@@ -127,9 +126,16 @@ def main():
     impatience = 0
     saved = False
     valid_world = None
+    epoch_curr = 0
     while True:
         world.parley()
         parleys += 1
+
+        if int(parleys/math.ceil(len(world)/opt['batchsize'])) > epoch_curr:
+            print('********************************************')
+            print('Epoch {} is done.'.format(epoch_curr))
+            print('********************************************')
+            epoch_curr = int(parleys/math.ceil(len(world)/opt['batchsize'])) 
 
         if opt['num_epochs'] > 0 and parleys >= max_parleys:
             print('[ num_epochs completed: {} ]'.format(opt['num_epochs']))
@@ -183,7 +189,7 @@ def main():
         if (opt['validation_every_n_secs'] > 0 and
                 validate_time.time() > opt['validation_every_n_secs']):
             valid_report, valid_world = run_eval(
-                agent, opt, 'valid', opt['validation_max_exs'],
+                agent, opt, 'valid', opt['validation_max_exs'], write_log=True,
                 valid_world=valid_world)
             if valid_report[opt['validation_metric']] > best_valid:
                 best_valid = valid_report[opt['validation_metric']]
