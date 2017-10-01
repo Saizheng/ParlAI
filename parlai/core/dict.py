@@ -12,7 +12,9 @@ import numpy as np
 import nltk
 import os
 import re
-
+import torchtext.vocab as vocab
+Glove = vocab.GloVe(name='840B', dim=300)
+from autocorrect import spell
 
 def escape(s):
     """Replace potential special characters with escaped version.

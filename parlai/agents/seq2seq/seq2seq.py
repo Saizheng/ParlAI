@@ -16,7 +16,9 @@ import torch
 import os
 import random
 import pdb
-
+import torchtext.vocab as vocab
+Glove = vocab.GloVe(name='840B', dim=300)
+import numpy as np
 
 class Seq2seqAgent(Agent):
     """Agent which takes an input sequence and produces an output sequence.
@@ -44,9 +46,9 @@ class Seq2seqAgent(Agent):
         """Add command-line arguments specifically for this agent."""
         DictionaryAgent.add_cmdline_args(argparser)
         agent = argparser.add_argument_group('Seq2Seq Arguments')
-        agent.add_argument('-hs', '--hiddensize', type=int, default=256,
+        agent.add_argument('-hs', '--hiddensize', type=int, default=512,
                            help='size of the hidden layers')
-        agent.add_argument('-emb', '--embeddingsize', type=int, default=256,
+        agent.add_argument('-emb', '--embeddingsize', type=int, default=300,
                            help='size of the token embeddings')
         agent.add_argument('-nl', '--numlayers', type=int, default=2,
                            help='number of hidden layers')
@@ -151,25 +153,46 @@ class Seq2seqAgent(Agent):
 
             # set up modules
             self.criterion = nn.NLLLoss()
+
             # lookup table stores word embeddings
+            # we will use Glove(840B, 300) pretrained embeddings
+            # TODO: Saizheng
             self.lt = nn.Embedding(len(self.dict), emb,
                                    padding_idx=self.NULL_IDX,
-                                   scale_grad_by_freq=False)
+                                   scale_grad_by_freq=True)
+            # rescale embedding weights, since Glove's embedding
+            # vector's L1 norm is around 0.2, those words which 
+            # are not in Glove should be initialized in [0, 0.01]
+            self.lt.weight[1:].data.normal_(0, 0.001)
+            for w in self.dict.freq:
+                if w in Glove.stoi:
+                    self.lt.weight.data[self.dict[w]] = Glove.vectors[Glove.stoi[w]]
+
             # encoder captures the input text
             enc_class = Seq2seqAgent.ENC_OPTS[opt['encoder']]
-            self.encoder = enc_class(hsz, hsz, opt['numlayers'])
+            self.encoder = enc_class(emb, hsz, opt['numlayers'])
+            #self.encoder.weight_hh_l0.data.normal_(0, 0.001)
+            #self.encoder.weight_ih_l0.data.normal_(0, 0.001)
+
             # decoder produces our output states
             if opt['decoder'] == 'shared':
                 self.decoder = self.encoder
             elif opt['decoder'] == 'same':
-                self.decoder = enc_class(hsz, hsz, opt['numlayers'])
+                self.decoder = enc_class(emb, hsz, opt['numlayers'])
             else:
                 dec_class = Seq2seqAgent.ENC_OPTS[opt['decoder']]
-                self.decoder = dec_class(hsz, hsz, opt['numlayers'])
+                self.decoder = dec_class(emb, hsz, opt['numlayers'])
+            #self.decoder.weight_hh_l0.data.normal_(0, 0.001)
+            #self.decoder.weight_ih_l0.data.normal_(0, 0.001)
+
             # linear layer helps us produce outputs from final decoder state
             self.h2o = nn.Linear(hsz, len(self.dict))
+
             # droput on the linear layer helps us generalize
             self.dropout = nn.Dropout(opt['dropout'])
+
+            # decoder START with size of hsz
+            self.decoder_START = Variable(torch.zeros(hsz))
 
             # if attention is greater than 0, set up additional members
             if not self.attention:
@@ -346,6 +369,7 @@ class Seq2seqAgent(Agent):
             if type(self.decoder) == nn.LSTM:
                 hidden = (hidden, h0)
         encoder_output = encoder_output.transpose(0, 1)
+        #print(np.mean(np.std(encoder_output[0,3:,:].cpu().data.numpy(), axis=0)/np.mean(np.abs(encoder_output[0,3:,:].cpu().data.numpy()), axis=0)))
 
         if not self.attention:
             pass 
@@ -464,6 +488,8 @@ class Seq2seqAgent(Agent):
 
         # cands are exs_with_cands x cands_per_ex x words_per_cand
         # cview is total_cands x words_per_cand
+        if type(self.decoder) == nn.LSTM:
+            hidden, cell = hidden
         cview = cands.view(-1, cands.size(2))
         cands_xes = xe.expand(xe.size(0), cview.size(0), xe.size(2))
         sz = hidden.size()
@@ -473,6 +499,13 @@ class Seq2seqAgent(Agent):
             .contiguous()
             .view(sz[0], -1, sz[2])
         )
+        if type(self.decoder) == nn.LSTM:
+            cands_cn = (
+                cell.view(sz[0], sz[1], 1, sz[2])
+                .expand(sz[0], sz[1], cands.size(1), sz[2])
+                .contiguous()
+                .view(sz[0], -1, sz[2])
+            )
 
         sz = encoder_output.size()
         cands_encoder_output = (
@@ -490,7 +523,10 @@ class Seq2seqAgent(Agent):
 
         for i in range(cview.size(1)):
             output = self._apply_attention(cands_xes, encoder_output, cands_hn, attn_mask) if (self.attention and not self.attention.endswith('post')) else cands_xes
-            output, cands_hn = self.decoder(output, cands_hn)
+            if type(self.decoder) == nn.LSTM:
+                output, (cands_hn, cands_cn) = self.decoder(output, (cands_hn, cands_cn))
+            else:
+                output, cands_hn = self.decoder(output, cands_hn)
             output = self._apply_attention(output, encoder_output, cands_hn, attn_mask) if (self.attention and self.attention.endswith('post')) else output
 
             preds, scores = self.hidden_to_idx(output, dropout=False)

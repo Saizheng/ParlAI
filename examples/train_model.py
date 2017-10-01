@@ -30,6 +30,9 @@ from parlai.core.utils import Timer
 import build_dict
 import math
 import pdb
+import torchtext.vocab as vocab
+Glove = vocab.GloVe(name='840B', dim=300)
+from autocorrect import spell
 
 def run_eval(agent, opt, datatype, max_exs=-1, write_log=False, valid_world=None):
     """Eval on validation/test data.
@@ -54,6 +57,7 @@ def run_eval(agent, opt, datatype, max_exs=-1, write_log=False, valid_world=None
     cnt = 0
     for _ in valid_world:
         valid_world.parley()
+        print('{}/{}'.format(cnt, len(valid_world)))
         if cnt == 0 and opt['display_examples']:
             print(valid_world.display() + '\n~~')
             print(valid_world.report())
@@ -127,6 +131,7 @@ def main():
     saved = False
     valid_world = None
     epoch_curr = 0
+
     while True:
         world.parley()
         parleys += 1
@@ -191,8 +196,10 @@ def main():
             valid_report, valid_world = run_eval(
                 agent, opt, 'valid', opt['validation_max_exs'], write_log=True,
                 valid_world=valid_world)
-            if valid_report[opt['validation_metric']] > best_valid:
-                best_valid = valid_report[opt['validation_metric']]
+            #if valid_report[opt['validation_metric']] > best_valid:
+            #    best_valid = valid_report[opt['validation_metric']]
+            if valid_report['hits@k'][1] > best_valid:
+                best_valid = valid_report['hits@k'][1]
                 impatience = 0
                 print('[ new best {}: {} ]'.format(
                     opt['validation_metric'], best_valid))
