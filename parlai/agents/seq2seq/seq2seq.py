@@ -586,7 +586,7 @@ class Seq2seqAgent(Agent):
         # valid examples
         exs = [ex for ex in observations if ('text' in ex and ('labels' in ex or 'label_candidates' in ex))]
         # the indices of the valid (non-empty) tensors
-        valid_inds = [i for i, ex in enumerate(observations) if 'text' in ex]
+        valid_inds = [i for i, ex in enumerate(observations) if ('text' in ex and ('labels' in ex or 'label_candidates' in ex))]
 
         # set up the input tensors
         batchsize = len(exs)
