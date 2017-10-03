@@ -92,9 +92,16 @@ class Seq2seqAgent(Agent):
     def __init__(self, opt, shared=None):
         """Set up model if shared params not set, otherwise no work to do."""
         super().__init__(opt, shared)
-        if not shared:
+        if shared:
+            self.answers = shared['answers']
+            self.START = shared['START']
+            self.END = shared['END']
+        else:
             # this is not a shared instance of this class, so do full
             # initialization. if shared is set, only set up shared members.
+
+            # self.answer is tracking the last output from model itself.
+            self.answers = [None] * opt['batchsize']
 
             # check for cuda
             self.use_cuda = not opt.get('no_cuda') and torch.cuda.is_available()
@@ -272,6 +279,13 @@ class Seq2seqAgent(Agent):
         """Reset observation and episode_done."""
         self.observation = None
         self.episode_done = True
+
+    def share(self):
+        shared = super().share()
+        shared['answers'] = self.answers
+        shared['START'] = self.START
+        shared['END'] = self.END
+        return shared
 
     def observe(self, observation):
         """Save observation for act.
@@ -552,11 +566,12 @@ class Seq2seqAgent(Agent):
 
         # set up the target tensors
         ys = None
+        labels = None
         if batchsize > 0 and any(['labels' in ex for ex in exs]):
             # randomly select one of the labels to update on, if multiple
             # append END to each label
-            labels = [random.choice(ex.get('labels', [''])) + ' ' + self.END for ex in exs]
-            parsed = [self.parse(y) for y in labels]
+            labels = [random.choice(ex.get('labels', [''])) for ex in exs]
+            parsed = [self.parse(y + ' ' + self.END) for y in labels]
             max_y_len = max(len(y) for y in parsed)
             if self.truncate:
                 # shrink ys to to limit batch computation
@@ -613,7 +628,7 @@ class Seq2seqAgent(Agent):
         #    vci = [int(i) for (i, ii) in enumerate(valid_inds) if ii in valid_cand_inds]
         #    xs = xs[vci, :]
 
-        return xs, ys, valid_inds, cands, valid_cands
+        return xs, ys, labels, valid_inds, cands, valid_cands
 
     def batch_act(self, observations):
         batchsize = len(observations)
@@ -624,7 +639,7 @@ class Seq2seqAgent(Agent):
         # valid_inds tells us the indices of all valid examples
         # e.g. for input [{}, {'text': 'hello'}, {}, {}], valid_inds is [1]
         # since the other three elements had no 'text' field
-        xs, ys, valid_inds, cands, valid_cands = self.batchify(observations)
+        xs, ys, labels, valid_inds, cands, valid_cands = self.batchify(observations)
 
         if xs is None:
             # no valid examples, just return the empty responses we set up
@@ -640,6 +655,11 @@ class Seq2seqAgent(Agent):
             curr = batch_reply[valid_inds[i]]
             curr['text'] = ' '.join(c for c in predictions[i] if c != self.END
                                     and c != self.dict.null_token)
+            curr_pred = curr['text']
+            if labels is not None:
+                self.answers[valid_inds[i]] = labels[i]
+            else:
+                self.answers[valid_inds[i]] = curr_pred
 
         if text_cand_inds is not None:
             for i in range(len(valid_cands)):
