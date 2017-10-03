@@ -14,6 +14,9 @@ import torch.nn.functional as F
 import torch
 import os
 import random
+import pdb
+import torchtext.vocab as vocab
+Glove = vocab.GloVe(name='840B', dim=300)
 
 
 class Seq2seqAgent(Agent):
@@ -42,9 +45,9 @@ class Seq2seqAgent(Agent):
         """Add command-line arguments specifically for this agent."""
         DictionaryAgent.add_cmdline_args(argparser)
         agent = argparser.add_argument_group('Seq2Seq Arguments')
-        agent.add_argument('-hs', '--hiddensize', type=int, default=128,
+        agent.add_argument('-hs', '--hiddensize', type=int, default=1024,
                            help='size of the hidden layers')
-        agent.add_argument('-emb', '--embeddingsize', type=int, default=128,
+        agent.add_argument('-emb', '--embeddingsize', type=int, default=300,
                            help='size of the token embeddings')
         agent.add_argument('-nl', '--numlayers', type=int, default=2,
                            help='number of hidden layers')
@@ -79,7 +82,7 @@ class Seq2seqAgent(Agent):
                            help='Choose between different decoder modules. '
                                 'Default "same" uses same class as encoder, '
                                 'while "shared" also uses the same weights.')
-        agent.add_argument('-opt', '--optimizer', default='sgd',
+        agent.add_argument('-opt', '--optimizer', default='adam',
                            choices=Seq2seqAgent.OPTIM_OPTS.keys(),
                            help='Choose between pytorch optimizers. '
                                 'Any member of torch.optim is valid and will '
@@ -142,20 +145,22 @@ class Seq2seqAgent(Agent):
             # lookup table stores word embeddings
             self.lt = nn.Embedding(len(self.dict), emb,
                                    padding_idx=self.NULL_IDX,
-                                   scale_grad_by_freq=True)
-            self.lt2enc = nn.Linear(emb, hsz)
-            self.lt2dec = nn.Linear(emb, hsz)
+                                   scale_grad_by_freq=False)
+            self.lt.weight[1:].data.normal_(0, 0.001)
+            for w in self.dict.freq:
+                if w in Glove.stoi:
+                    self.lt.weight.data[self.dict[w]] = Glove.vectors[Glove.stoi[w]]
             # encoder captures the input text
             enc_class = Seq2seqAgent.ENC_OPTS[opt['encoder']]
-            self.encoder = enc_class(hsz, hsz, opt['numlayers'])
+            self.encoder = enc_class(emb, hsz, opt['numlayers'])
             # decoder produces our output states
             if opt['decoder'] == 'shared':
                 self.decoder = self.encoder
             elif opt['decoder'] == 'same':
-                self.decoder = enc_class(hsz, hsz, opt['numlayers'])
+                self.decoder = enc_class(emb, hsz, opt['numlayers'])
             else:
                 dec_class = Seq2seqAgent.ENC_OPTS[opt['decoder']]
-                self.decoder = dec_class(hsz, hsz, opt['numlayers'])
+                self.decoder = dec_class(emb, hsz, opt['numlayers'])
             # linear layer helps us produce outputs from final decoder state
             self.h2o = nn.Linear(hsz, len(self.dict))
             # droput on the linear layer helps us generalize
@@ -177,8 +182,6 @@ class Seq2seqAgent(Agent):
             optim_class = Seq2seqAgent.OPTIM_OPTS[opt['optimizer']]
             self.optims = {
                 'lt': optim_class(self.lt.parameters(), lr=lr),
-                'lt2enc': optim_class(self.lt2enc.parameters(), lr=lr),
-                'lt2dec': optim_class(self.lt2dec.parameters(), lr=lr),
                 'encoder': optim_class(self.encoder.parameters(), lr=lr),
                 'decoder': optim_class(self.decoder.parameters(), lr=lr),
                 'h2o': optim_class(self.h2o.parameters(), lr=lr),
@@ -191,6 +194,8 @@ class Seq2seqAgent(Agent):
             if self.use_cuda:
                 self.cuda()
 
+        self.loss = 0.0
+        self.loss_c = 0
         self.reset()
 
     def override_opt(self, new_opt):
@@ -233,8 +238,6 @@ class Seq2seqAgent(Agent):
         self.cand_lengths = self.cand_lengths.cuda(async=True)
         self.criterion.cuda()
         self.lt.cuda()
-        self.lt2enc.cuda()
-        self.lt2dec.cuda()
         self.encoder.cuda()
         self.decoder.cuda()
         self.h2o.cuda()
@@ -291,14 +294,15 @@ class Seq2seqAgent(Agent):
 
         # first encode context
         xes = self.lt(xs)
+
         if dropout:
             xes = self.dropout(xes)
         # project from emb_size to hidden_size dimensions
-        xes = self.lt2enc(xes).transpose(0, 1)
-
+        xes = xes.transpose(0, 1)
         if self.zeros.size(1) != batchsize:
             self.zeros.resize_(self.num_layers, batchsize, self.hidden_size).fill_(0)
         h0 = Variable(self.zeros)
+
         if type(self.encoder) == nn.LSTM:
             encoder_output, hidden = self.encoder(xes, (h0, h0))
             if type(self.decoder) != nn.LSTM:
@@ -309,6 +313,9 @@ class Seq2seqAgent(Agent):
                 hidden = (hidden, h0)
         encoder_output = encoder_output.transpose(0, 1)
 
+        if hasattr(self, 'check_hidden') and self.check_hidden == True:
+            pdb.set_trace()
+            self.check_hidden = False
         if self.use_attention:
             if encoder_output.size(1) > self.max_length:
                 offset = encoder_output.size(1) - self.max_length
@@ -351,12 +358,14 @@ class Seq2seqAgent(Agent):
             loss += self.criterion(scores, y)
             # use the true token as the next input instead of predicted
             # this produces a biased prediction but better training
-            xes = self.lt2dec(self.lt(y).unsqueeze(0))
+            xes = self.lt(y).unsqueeze(0)
             for b in range(batchsize):
                 # convert the output scores to tokens
                 token = self.v2t([preds.data[b]])
                 output_lines[b].append(token)
-
+        
+        self.loss += loss.data.cpu().numpy()[0]
+        self.loss_c += 1
         loss.backward()
         self.update_params()
 
@@ -384,7 +393,7 @@ class Seq2seqAgent(Agent):
             output, hidden = self.decoder(output, hidden)
             preds, scores = self.hidden_to_idx(output, dropout=False)
 
-            xes = self.lt2dec(self.lt(preds.unsqueeze(0)))
+            xes = self.lt(preds.unsqueeze(0))
             max_len += 1
             for b in range(batchsize):
                 if not done[b]:
@@ -408,6 +417,8 @@ class Seq2seqAgent(Agent):
 
         # cands are exs_with_cands x cands_per_ex x words_per_cand
         # cview is total_cands x words_per_cand
+        if type(self.decoder) == nn.LSTM:
+            hidden, cell = hidden
         cview = cands.view(-1, cands.size(2))
         cands_xes = xe.expand(xe.size(0), cview.size(0), xe.size(2))
         sz = hidden.size()
@@ -417,6 +428,13 @@ class Seq2seqAgent(Agent):
             .contiguous()
             .view(sz[0], -1, sz[2])
         )
+        if type(self.decoder) == nn.LSTM:
+            cands_cn = (
+                cell.view(sz[0], sz[1], 1, sz[2])
+                .expand(sz[0], sz[1], cands.size(1), sz[2])
+                .contiguous()
+                .view(sz[0], -1, sz[2])
+            )
 
         sz = encoder_output.size()
         cands_encoder_output = (
@@ -435,15 +453,17 @@ class Seq2seqAgent(Agent):
         for i in range(cview.size(1)):
             output = self._apply_attention(cands_xes, cands_encoder_output, cands_hn) \
                     if self.use_attention else cands_xes
-
-            output, cands_hn = self.decoder(output, cands_hn)
+            if type(self.decoder) == nn.LSTM:
+                output, (cands_hn, cands_cn) = self.decoder(output, (cands_hn, cands_cn))
+            else:
+                output, cands_hn = self.decoder(output, cands_hn)
             preds, scores = self.hidden_to_idx(output, dropout=False)
             cs = cview.select(1, i)
             non_nulls = cs.ne(self.NULL_IDX)
             cand_lengths += non_nulls.long()
             score_per_cand = torch.gather(scores, 1, cs.unsqueeze(1))
             cand_scores += score_per_cand.squeeze() * non_nulls.float()
-            cands_xes = self.lt2dec(self.lt(cs).unsqueeze(0))
+            cands_xes = self.lt(cs).unsqueeze(0)
 
         # set empty scores to -1, so when divided by 0 they become -inf
         cand_scores -= cand_lengths.eq(0).float()
@@ -465,11 +485,13 @@ class Seq2seqAgent(Agent):
         batchsize = len(xs)
         text_cand_inds = None
         is_training = ys is not None
+
         encoder_output, hidden = self._encode(xs, dropout=is_training)
+
 
         # next we use END as an input to kick off our decoder
         x = Variable(self.START_TENSOR)
-        xe = self.lt2dec(self.lt(x).unsqueeze(1))
+        xe = self.lt(x).unsqueeze(1)
         xes = xe.expand(xe.size(0), batchsize, xe.size(2))
 
         # list of output tokens for each example in the batch
@@ -492,9 +514,15 @@ class Seq2seqAgent(Agent):
     def batchify(self, observations):
         """Convert a list of observations into input & target tensors."""
         # valid examples
-        exs = [ex for ex in observations if 'text' in ex]
+        #if any(['eval_labels' in obs for obs in observations]):
+        #    exs = [ex for ex in observations if ('text' in ex and ('labels' in ex or 'label_candidates' in ex))]
+        #else:
+        #    exs = [ex for ex in observations if 'text' in ex]
+        exs = [ex for ex in observations if ('text' in ex and ('labels' in ex or 'label_candidates' in ex))]
+
         # the indices of the valid (non-empty) tensors
-        valid_inds = [i for i, ex in enumerate(observations) if 'text' in ex]
+        valid_inds = [i for i, ex in enumerate(observations) if ('text' in ex and ('labels' in ex or 'label_candidates' in ex))]
+        #valid_inds = [i for i, ex in enumerate(observations) if 'text' in ex]
 
         # set up the input tensors
         batchsize = len(exs)
@@ -580,6 +608,11 @@ class Seq2seqAgent(Agent):
                 else:
                     cands = Variable(cands)
 
+        #if valid_cands:
+        #    valid_cand_inds = [vc[0] for vc in valid_cands]
+        #    vci = [int(i) for (i, ii) in enumerate(valid_inds) if ii in valid_cand_inds]
+        #    xs = xs[vci, :]
+
         return xs, ys, valid_inds, cands, valid_cands
 
     def batch_act(self, observations):
@@ -628,8 +661,6 @@ class Seq2seqAgent(Agent):
         if path and hasattr(self, 'lt'):
             model = {}
             model['lt'] = self.lt.state_dict()
-            model['lt2enc'] = self.lt2enc.state_dict()
-            model['lt2dec'] = self.lt2dec.state_dict()
             model['encoder'] = self.encoder.state_dict()
             model['decoder'] = self.decoder.state_dict()
             model['h2o'] = self.h2o.state_dict()
@@ -658,11 +689,14 @@ class Seq2seqAgent(Agent):
     def set_states(self, states):
         """Set the state dicts of the modules from saved states."""
         self.lt.load_state_dict(states['lt'])
-        self.lt2enc.load_state_dict(states['lt2enc'])
-        self.lt2dec.load_state_dict(states['lt2dec'])
         self.encoder.load_state_dict(states['encoder'])
         self.decoder.load_state_dict(states['decoder'])
         self.h2o.load_state_dict(states['h2o'])
         for k, v in states['optims'].items():
             self.optims[k].load_state_dict(v)
         self.longest_label = states['longest_label']
+
+    def report_loss(self):
+        print("The loss is {}".format(self.loss/(self.loss_c+1e-10)))
+        self.loss = 0.0
+        self.loss_c = 0 

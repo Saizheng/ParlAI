@@ -29,8 +29,9 @@ from parlai.core.params import ParlaiParser
 from parlai.core.utils import Timer
 import build_dict
 import math
+import pdb
 
-def run_eval(agent, opt, datatype, max_exs=-1, write_log=False, valid_world=None):
+def run_eval(agent, opt, datatype, max_exs=-1, write_log=True, valid_world=None):
     """Eval on validation/test data.
     - Agent is the agent to use for the evaluation.
     - opt is the options that specific the task, eval_task, etc
@@ -176,15 +177,21 @@ def main():
             log = '[ {} ] {}'.format(' '.join(logs), train_report)
 
             print(log)
+            world.world.agents[1].report_loss()
             log_time.reset()
 
         if (opt['validation_every_n_secs'] > 0 and
                 validate_time.time() > opt['validation_every_n_secs']):
+            #validate_time.reset()
+            #agent.check_hidden = True
+            #continue
             valid_report, valid_world = run_eval(
                 agent, opt, 'valid', opt['validation_max_exs'],
                 valid_world=valid_world)
-            if valid_report[opt['validation_metric']] > best_valid:
-                best_valid = valid_report[opt['validation_metric']]
+            #if valid_report[opt['validation_metric']] > best_valid:
+            #    best_valid = valid_report[opt['validation_metric']]
+            if valid_report['hits@k'][1] > best_valid:
+                best_valid = valid_report['hits@k'][1]
                 impatience = 0
                 print('[ new best {}: {} ]'.format(
                     opt['validation_metric'], best_valid))
