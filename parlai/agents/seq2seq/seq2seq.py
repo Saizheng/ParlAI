@@ -639,6 +639,11 @@ class Seq2seqAgent(Agent):
         # valid_inds tells us the indices of all valid examples
         # e.g. for input [{}, {'text': 'hello'}, {}, {}], valid_inds is [1]
         # since the other three elements had no 'text' field
+
+        #print(observations[0]['text'])
+        #var = input('enter your message: ')
+        #observations[0]['text'] = var
+
         xs, ys, labels, valid_inds, cands, valid_cands = self.batchify(observations)
 
         if xs is None:
@@ -648,6 +653,10 @@ class Seq2seqAgent(Agent):
         # produce predictions either way, but use the targets if available
 
         predictions, text_cand_inds = self.predict(xs, ys, cands)
+
+        #print(' '.join(predictions[0]))
+        #print(observations[0]['labels'])
+        #pdb.set_trace()
 
         for i in range(len(predictions)):
             # map the predictions back to non-empty examples in the batch
