@@ -129,7 +129,7 @@ class DictionaryAgent(Agent):
             self.tok2ind = shared.get('tok2ind', {})
             self.ind2tok = shared.get('ind2tok', {})
         else:
-            self.freq = defaultdict(int)
+            self.freq = {} 
             self.tok2ind = {}
             self.ind2tok = {}
 
@@ -260,7 +260,10 @@ class DictionaryAgent(Agent):
     def add_to_dict(self, tokens):
         """ Builds dictionary from the list of provided tokens."""
         for token in tokens:
-            self.freq[token] += 1
+            if token not in self.freq:
+                self.freq[token] = 1
+            else:
+                self.freq[token] += 1
             if token not in self.tok2ind:
                 index = len(self.tok2ind)
                 self.tok2ind[token] = index

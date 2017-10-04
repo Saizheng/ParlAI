@@ -167,7 +167,7 @@ class Metrics(object):
             m['hits@k'] = {}
             for k in self.eval_pr:
                 m['hits@k'][k] = round_sigfigs(
-                    self.metrics['hits@' + str(k)] / self.metrics['cnt'], 4)
+                    self.metrics['hits@' + str(k)] / self.metrics['cnt'], 3)
         return m
 
     def clear(self):

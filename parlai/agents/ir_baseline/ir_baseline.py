@@ -65,6 +65,8 @@ def score_match(query_rep, text, length_penalty, debug=False):
     rw = query_rep['words']
     used = {}
     for w in words:
+        if w == '__UNK__':
+            continue
         if w in rw and w not in used:
             #score += 1
             score += rw[w]
@@ -75,14 +77,18 @@ def score_match(query_rep, text, length_penalty, debug=False):
     score = score / math.pow(norm * query_rep['norm'], length_penalty)
     return score
 
-def rank_candidates(query_rep, cands, length_penalty):
+def rank_candidates(query_rep, cands, length_penalty, real_cands=None):
     """ Rank candidates given representation of query """
+    if real_cands == None:
+        real_cands = cands
     if True:
         mpq = MaxPriorityQueue(100)
-        for c in cands:
-            score = score_match(query_rep, c, length_penalty)
-            mpq.add(c, score)
-        return list(reversed(mpq))
+        mpq_real = MaxPriorityQueue(100)
+        for i in range(len(cands)):
+            score = score_match(query_rep, cands[i], length_penalty)
+            mpq.add(cands[i], score)
+            mpq_real.add(real_cands[i], score)
+        return list(reversed(mpq_real))
     else:
         cands = list(cands)
         score = [0] * len(cands)
@@ -91,7 +97,7 @@ def rank_candidates(query_rep, cands, length_penalty):
         r = [i[0] for i in sorted(enumerate(score), key=lambda x:x[1])]
         res = []
         for i in range(min(100, len(score))):
-            res.append(cands[r[i]])
+            res.append(real_cands[r[i]])
         print(score[r[0]])
         return res
 
@@ -157,7 +163,7 @@ class IrBaselineAgent(Agent):
             if len(self.dictionary.freqs()) > 0:
                 if w not in self.dictionary.freqs():
                     print(w, len(w))
-                rw[w] = 1.0 / (1.0 + math.log(1.0 + self.dictionary.freqs()[w]))
+                rw[w] = 1.0 / (1.0 + math.log(1.0 + self.dictionary.freqs().get(w, 1e9)))
                 #rw[w] = math.log(1.0 + self.nwords_dict/self.dictionary.freqs()[w])
             else:
                 if w not in stopwords:
