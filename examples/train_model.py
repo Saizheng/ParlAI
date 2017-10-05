@@ -185,6 +185,9 @@ def main():
             #validate_time.reset()
             #agent.check_hidden = True
             #continue
+            world.save_agents()
+            saved = True
+
             valid_report, valid_world = run_eval(
                 agent, opt, 'valid', opt['validation_max_exs'],
                 valid_world=valid_world)
@@ -195,8 +198,6 @@ def main():
                 impatience = 0
                 print('[ new best {}: {} ]'.format(
                     opt['validation_metric'], best_valid))
-                world.save_agents()
-                saved = True
                 if opt['validation_metric'] == 'accuracy' and best_valid == 1:
                     print('[ task solved! stopping. ]')
                     break

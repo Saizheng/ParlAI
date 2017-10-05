@@ -640,7 +640,7 @@ class Seq2seqAgent(Agent):
         # e.g. for input [{}, {'text': 'hello'}, {}, {}], valid_inds is [1]
         # since the other three elements had no 'text' field
 
-        #print(observations[0]['text'])
+        #print('OBSVS:' + observations[0]['text'])
         #var = input('enter your message: ')
         #observations[0]['text'] = var
 
@@ -654,8 +654,8 @@ class Seq2seqAgent(Agent):
 
         predictions, text_cand_inds = self.predict(xs, ys, cands)
 
-        #print(' '.join(predictions[0]))
-        #print(observations[0]['labels'])
+        #print('MODEL:' + ' '.join(predictions[0]))
+        #print('TRUE :' + observations[0]['eval_labels'][0])
         #pdb.set_trace()
 
         for i in range(len(predictions)):
