@@ -6,6 +6,7 @@
 
 from parlai.core.agents import Agent
 from parlai.core.dict import DictionaryAgent
+from parlai.core.metrics import _f1_score
 
 from torch.autograd import Variable
 from torch import optim
@@ -55,9 +56,12 @@ class Seq2seqAgent(Agent):
                            help='learning rate')
         agent.add_argument('-dr', '--dropout', type=float, default=0.1,
                            help='dropout rate')
-        agent.add_argument('-att', '--attention', type=int, default=0,
-                           help='if greater than 0, use attention of specified'
-                                ' length while decoding')
+        agent.add_argument('-att', '--attention', default=None,
+                           help='None, concat, general, local. If local,'
+                                'something like "local,N" should be the keyword, '
+                                'where N stands for specified attention length '
+                                'while decoding. For more details see: ' 
+                                'https://arxiv.org/pdf/1508.04025.pdf')
         agent.add_argument('--no-cuda', action='store_true', default=False,
                            help='disable GPUs even if available')
         agent.add_argument('--gpu', type=int, default=-1,
@@ -173,15 +177,22 @@ class Seq2seqAgent(Agent):
             # droput on the linear layer helps us generalize
             self.dropout = nn.Dropout(opt['dropout'])
 
-            self.use_attention = False
-            # if attention is greater than 0, set up additional members
-            if self.attention > 0:
-                self.use_attention = True
-                self.max_length = self.attention
+            if not self.attention:
+                pass
+            elif self.attention.startswith('local'):
+                self.max_length = int(self.attention.split(',')[1])
                 # combines input and previous hidden output layer
                 self.attn = nn.Linear(hsz * 2, self.max_length)
                 # combines attention weights with encoder outputs
-                self.attn_combine = nn.Linear(hsz * 2, hsz)
+                self.attn_combine = nn.Linear(hsz * 2, emb)
+
+            elif self.attention == 'concat':
+                self.attn = nn.Linear(hsz * 2, hsz)
+                self.attn_v = nn.Linear(hsz, 1) 
+                self.attn_combine = nn.Linear(hsz + emb, emb)
+            elif self.attention == 'general':
+                self.attn = nn.Linear(hsz, hsz)
+                self.attn_combine = nn.Linear(hsz + emb, emb)
 
             # set up optims for each module
             lr = opt['learningrate']
@@ -193,6 +204,11 @@ class Seq2seqAgent(Agent):
                 'decoder': optim_class(self.decoder.parameters(), lr=lr),
                 'h2o': optim_class(self.h2o.parameters(), lr=lr),
             }
+
+            # load attention parameters into optims
+            for attn_name in ['attn', 'attn_v', 'attn_combine']:
+                if hasattr(self, attn_name):
+                    self.optims[attn_name] = optim_class(getattr(self, attn_name).parameters(), lr=lr)
 
             if hasattr(self, 'states'):
                 # set loaded states if applicable
@@ -249,7 +265,16 @@ class Seq2seqAgent(Agent):
         self.decoder.cuda()
         self.h2o.cuda()
         self.dropout.cuda()
-        if self.use_attention:
+        if not self.attention:
+            pass 
+        elif self.attention.startswith('local'):
+            self.attn.cuda()
+            self.attn_combine.cuda()
+        elif self.attention == 'concat':
+            self.attn.cuda()
+            self.attn_v.cuda()
+            self.attn_combine.cuda()
+        elif self.attention == 'general':
             self.attn.cuda()
             self.attn_combine.cuda()
 
@@ -330,31 +355,42 @@ class Seq2seqAgent(Agent):
         if hasattr(self, 'check_hidden') and self.check_hidden == True:
             pdb.set_trace()
             self.check_hidden = False
-        if self.use_attention:
+
+        if not self.attention:
+            pass
+        elif self.attention.startswith('local'):
             if encoder_output.size(1) > self.max_length:
                 offset = encoder_output.size(1) - self.max_length
                 encoder_output = encoder_output.narrow(1, offset, self.max_length)
 
         return encoder_output, hidden
 
-
-    def _apply_attention(self, xes, encoder_output, encoder_hidden):
+    def _apply_attention(self, xes, encoder_output, hidden, attn_mask=None):
         """Apply attention to encoder hidden layer."""
-        attn_weights = F.softmax(self.attn(torch.cat((xes[0], encoder_hidden[-1]), 1)))
+        if self.attention.startswith('concat'):
+            hidden_expand = hidden[-1].unsqueeze(1).expand(hidden.size()[1], encoder_output.size()[1], hidden.size()[2])
+            attn_w_premask = self.attn_v(F.tanh(self.attn(torch.cat((encoder_output, hidden_expand), 2)))).squeeze(2)
+            attn_weights = F.softmax(attn_w_premask * attn_mask.float() - (1 - attn_mask.float()) * 1e20)
 
-        if attn_weights.size(1) > encoder_output.size(1):
-            attn_weights = attn_weights.narrow(1, 0, encoder_output.size(1) )
+        if self.attention.startswith('general'):
+            hidden_expand = hidden[-1].unsqueeze(1)
+            attn_w_premask = torch.bmm(self.attn(hidden_expand), encoder_output.transpose(1, 2)).squeeze(1)
+            attn_weights = F.softmax(attn_w_premask * attn_mask.float() - (1 - attn_mask.float()) * 1e20)
+
+        if self.attention.startswith('local'): 
+            attn_weights = F.softmax(self.attn(torch.cat((xes[0], hidden[-1]), 1)))
+            if attn_weights.size(1) > encoder_output.size(1):
+                attn_weights = attn_weights.narrow(1, 0, encoder_output.size(1) )
 
         attn_applied = torch.bmm(attn_weights.unsqueeze(1), encoder_output).squeeze(1)
 
         output = torch.cat((xes[0], attn_applied), 1)
         output = self.attn_combine(output).unsqueeze(0)
-        output = F.relu(output)
+        output = F.tanh(output)
 
         return output
 
-
-    def _decode_and_train(self, batchsize, xes, ys, encoder_output, hidden):
+    def _decode_and_train(self, batchsize, xes, ys, encoder_output, hidden, attn_mask):
         # update the model based on the labels
         self.zero_grad()
         loss = 0
@@ -364,7 +400,9 @@ class Seq2seqAgent(Agent):
         # keep track of longest label we've ever seen
         self.longest_label = max(self.longest_label, ys.size(1))
         for i in range(ys.size(1)):
-            output = self._apply_attention(xes, encoder_output, hidden) if self.use_attention else xes
+            if type(self.decoder) == nn.LSTM:
+                h = hidden[0]
+            output = self._apply_attention(xes, encoder_output, h, attn_mask) if self.attention else xes
 
             output, hidden = self.decoder(output, hidden)
             preds, scores = self.hidden_to_idx(output, dropout=True)
@@ -390,7 +428,7 @@ class Seq2seqAgent(Agent):
 
         return output_lines
 
-    def _decode_only(self, batchsize, xes, ys, encoder_output, hidden):
+    def _decode_only(self, batchsize, xes, ys, encoder_output, hidden, attn_mask):
         # just produce a prediction without training the model
         done = [False for _ in range(batchsize)]
         total_done = 0
@@ -402,7 +440,9 @@ class Seq2seqAgent(Agent):
         while(total_done < batchsize) and max_len < self.longest_label:
             # keep producing tokens until we hit END or max length for each
             # example in the batch
-            output = self._apply_attention(xes, encoder_output, hidden) if self.use_attention else xes
+            if type(self.decoder) == nn.LSTM:
+                h = hidden[0]
+            output = self._apply_attention(xes, encoder_output, h, attn_mask) if self.attention else xes 
 
             output, hidden = self.decoder(output, hidden)
             preds, scores = self.hidden_to_idx(output, dropout=False)
@@ -426,7 +466,7 @@ class Seq2seqAgent(Agent):
 
         return output_lines
 
-    def _score_candidates(self, cands, xe, encoder_output, hidden):
+    def _score_candidates(self, cands, xe, encoder_output, hidden, attn_mask):
         # score each candidate separately
 
         # cands are exs_with_cands x cands_per_ex x words_per_cand
@@ -459,14 +499,22 @@ class Seq2seqAgent(Agent):
             .view(-1, sz[1], sz[2])
         )
 
+        sz = attn_mask.size()
+        cands_attn_mask = (
+            attn_mask.contiguous()
+            .view(sz[0], 1, sz[1])
+            .expand(sz[0], cands.size(1), sz[1])
+            .contiguous()
+            .view(-1, sz[1])
+        )
+
         cand_scores = Variable(
                     self.cand_scores.resize_(cview.size(0)).fill_(0))
         cand_lengths = Variable(
                     self.cand_lengths.resize_(cview.size(0)).fill_(0))
 
         for i in range(cview.size(1)):
-            output = self._apply_attention(cands_xes, cands_encoder_output, cands_hn) \
-                    if self.use_attention else cands_xes
+            output = self._apply_attention(cands_xes, cands_encoder_output, cands_hn, cands_attn_mask) if self.attention else cand_exs
             if type(self.decoder) == nn.LSTM:
                 output, (cands_hn, cands_cn) = self.decoder(output, (cands_hn, cands_cn))
             else:
@@ -511,17 +559,19 @@ class Seq2seqAgent(Agent):
         # list of output tokens for each example in the batch
         output_lines = None
 
+        attn_mask = Variable(xs.data.ne(0), requires_grad=False)
+
         if is_training:
             output_lines = self._decode_and_train(batchsize, xes, ys,
-                                                  encoder_output, hidden)
+                                                  encoder_output, hidden, attn_mask)
 
         else:
             if cands is not None:
                 text_cand_inds = self._score_candidates(cands, xe,
-                                                        encoder_output, hidden)
+                                                        encoder_output, hidden, attn_mask)
 
             output_lines = self._decode_only(batchsize, xes, ys,
-                                             encoder_output, hidden)
+                                             encoder_output, hidden, attn_mask)
 
         return output_lines, text_cand_inds
 
@@ -640,7 +690,8 @@ class Seq2seqAgent(Agent):
         # e.g. for input [{}, {'text': 'hello'}, {}, {}], valid_inds is [1]
         # since the other three elements had no 'text' field
 
-        #print('OBSVS:' + observations[0]['text'])
+        if self.opt['datatype'] in ['valid', 'test']:
+            print('OBSVS:' + observations[0]['text'])
         #var = input('enter your message: ')
         #observations[0]['text'] = var
 
@@ -654,9 +705,16 @@ class Seq2seqAgent(Agent):
 
         predictions, text_cand_inds = self.predict(xs, ys, cands)
 
-        #print('MODEL:' + ' '.join(predictions[0]))
-        #print('TRUE :' + observations[0]['eval_labels'][0])
-        #pdb.set_trace()
+        if self.opt['datatype'] in ['valid', 'test']:
+            print('MODEL:' + ' '.join(predictions[0]))
+            f1_best = 0
+            msg_best = ''
+            for msg in self.teacher.data_dialogs['train']['messages']:
+                f1_tmp = _f1_score(' '.join(predictions[0]), [msg[1][1]])
+                msg_best = msg[1][1] if f1_tmp > f1_best else msg_best
+                f1_best = f1_tmp if f1_tmp > f1_best else f1_best
+            print('BEST: {}'.format(msg_best))
+            print('TRUE :' + observations[0]['eval_labels'][0])
 
         for i in range(len(predictions)):
             # map the predictions back to non-empty examples in the batch
