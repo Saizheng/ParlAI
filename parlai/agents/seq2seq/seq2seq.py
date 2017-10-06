@@ -751,6 +751,9 @@ class Seq2seqAgent(Agent):
             model['encoder'] = self.encoder.state_dict()
             model['decoder'] = self.decoder.state_dict()
             model['h2o'] = self.h2o.state_dict()
+            for attn_name in ['attn', 'attn_v', 'attn_combine']:
+                if hasattr(self, attn_name):
+                    model[attn_name] = getattr(self, attn_name).state_dict()
             model['optims'] = {k: v.state_dict()
                                for k, v in self.optims.items()}
             model['longest_label'] = self.longest_label
@@ -779,6 +782,9 @@ class Seq2seqAgent(Agent):
         self.encoder.load_state_dict(states['encoder'])
         self.decoder.load_state_dict(states['decoder'])
         self.h2o.load_state_dict(states['h2o'])
+        for attn_name in ['attn', 'attn_v', 'attn_combine']:
+            if hasattr(self, attn_name):
+                getattr(self, attn_name).load_state_dict(states[attn_name])
         for k, v in states['optims'].items():
             self.optims[k].load_state_dict(v)
         self.longest_label = states['longest_label']
