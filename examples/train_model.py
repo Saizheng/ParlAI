@@ -177,7 +177,10 @@ def main():
             log = '[ {} ] {}'.format(' '.join(logs), train_report)
 
             print(log)
-            world.world.agents[1].report_loss()
+            if opt['batchsize'] == 1:
+                world.agents[1].report_loss()
+            else:
+                world.world.agents[1].report_loss()
             log_time.reset()
 
         if (opt['validation_every_n_secs'] > 0 and

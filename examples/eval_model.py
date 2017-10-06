@@ -29,6 +29,7 @@ def main():
     # Create model and assign it to the specified task
     agent = create_agent(opt)
     world = create_task(opt, agent)
+    agent.teacher = world.agents[0]
 
     # Show some example dialogs:
     for k in range(int(opt['num_examples'])):
