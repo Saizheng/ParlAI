@@ -163,18 +163,18 @@ class Seq2seqAgent(Agent):
                     self.lt.weight.data[self.dict[w]] = Glove.vectors[Glove.stoi[w]]
             # encoder captures the input text
             enc_class = Seq2seqAgent.ENC_OPTS[opt['encoder']]
-            self.encoder = enc_class(emb, hsz, opt['numlayers'])
+            self.encoder = enc_class(emb, hsz, opt['numlayers'], dropout=opt['dropout'])
             # decoder produces our output states
             if opt['decoder'] == 'shared':
                 self.decoder = self.encoder
             elif opt['decoder'] == 'same':
-                self.decoder = enc_class(emb, hsz, opt['numlayers'])
+                self.decoder = enc_class(emb, hsz, opt['numlayers'], dropout=opt['dropout'])
             else:
                 dec_class = Seq2seqAgent.ENC_OPTS[opt['decoder']]
-                self.decoder = dec_class(emb, hsz, opt['numlayers'])
+                self.decoder = dec_class(emb, hsz, opt['numlayers'], dropout=opt['dropout'])
             # linear layer helps us produce outputs from final decoder state
             self.h2o = nn.Linear(hsz, len(self.dict))
-            # droput on the linear layer helps us generalize
+            # dropout on the linear layer helps us generalize
             self.dropout = nn.Dropout(opt['dropout'])
 
             if not self.attention:
