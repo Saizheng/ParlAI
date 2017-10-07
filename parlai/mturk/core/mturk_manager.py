@@ -38,7 +38,7 @@ WORLD_START_TIMEOUT = 11
 HIT_MULT = 1.5
 
 # Max number of conversation disconnects before a turker should be blocked
-MAX_DISCONNECTS = 5
+MAX_DISCONNECTS = 20
 
 # Time to persist a disconnect before forgetting about it. Combined with the
 # above this will block workers that disconnect at least 25 times in a week
