@@ -192,6 +192,7 @@ class Seq2seqAgent(Agent):
                 self.attn_combine = nn.Linear(hsz + emb, emb)
             elif self.attention == 'general':
                 self.attn = nn.Linear(hsz, hsz)
+                self.attn.weight.data = torch.eye(hsz)
                 self.attn_combine = nn.Linear(hsz + emb, emb)
 
             # set up optims for each module
