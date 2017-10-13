@@ -27,9 +27,17 @@ def main():
     parser.set_defaults(datatype='valid')
     opt = parser.parse_args()
     # Create model and assign it to the specified task
-    agent = create_agent(opt)
-    world = create_task(opt, agent)
-    agent.teacher = world.agents[0]
+    if opt.get('personachat_usecopy', None):
+        symbol_words = symbol_words = ['_s{}_'.format(i) for i in range(20)]
+        #symbol_words = world.world.agents[0].symbol_words
+        opt['personachat_symbol_words'] = symbol_words
+        agent = create_agent(opt)
+        world = create_task(opt, agent)
+        agent.teacher = world.agents[0]
+    else:
+        agent = create_agent(opt)
+        world = create_task(opt, agent)
+        agent.teacher = world.agents[0]
 
     # Show some example dialogs:
     for k in range(int(opt['num_examples'])):

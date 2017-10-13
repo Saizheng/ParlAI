@@ -711,13 +711,17 @@ class Seq2seqAgent(Agent):
 
         if self.opt['datatype'] in ['valid', 'test']:
             print('MODEL:' + ' '.join(predictions[0]))
-            f1_best = 0
-            msg_best = ''
-            for msg in self.teacher.data_dialogs['train']['messages']:
-                f1_tmp = _f1_score(' '.join(predictions[0]), [msg[1][1]])
-                msg_best = msg[1][1] if f1_tmp > f1_best else msg_best
-                f1_best = f1_tmp if f1_tmp > f1_best else f1_best
-            print('BEST: {}'.format(msg_best))
+            symbol_words = ['_s{}_'.format(i) for i in range(20)]
+            for s in symbol_words:
+                if (s in ' '.join(predictions[0])) and (s in observations[0]['text']):
+                    pdb.set_trace()
+            #f1_best = 0
+            #msg_best = ''
+            #for msg in self.teacher.data_dialogs['train']['messages']:
+            #    f1_tmp = _f1_score(' '.join(predictions[0]), [msg[1][1]])
+            #    msg_best = msg[1][1] if f1_tmp > f1_best else msg_best
+            #    f1_best = f1_tmp if f1_tmp > f1_best else f1_best
+            #print('BEST: {}'.format(msg_best))
             print('TRUE :' + observations[0]['eval_labels'][0])
 
         for i in range(len(predictions)):
