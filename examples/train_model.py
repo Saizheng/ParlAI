@@ -115,6 +115,12 @@ def main():
     # Create model and assign it to the specified task
     agent = create_agent(opt)
     world = create_task(opt, agent)
+    if opt.get('personachat_usecopy', None):
+        symbol_words = world.world.agents[0].symbol_words
+        opt['personachat_symbol_words'] = symbol_words
+        agent = create_agent(opt)
+        world = create_task(opt, agent)
+
 
     train_time = Timer()
     validate_time = Timer()

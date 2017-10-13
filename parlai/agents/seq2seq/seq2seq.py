@@ -121,6 +121,9 @@ class Seq2seqAgent(Agent):
                 opt = self.override_opt(new_opt)
 
             self.dict = DictionaryAgent(opt)
+            if opt.get('personachat_symbol_words', None):
+                for w in opt['personachat_symbol_words']:
+                    self.dict.add_to_dict([w])
             self.id = 'Seq2Seq'
             # we use START markers to start our output
             self.START = self.dict.start_token
