@@ -145,6 +145,7 @@ class Seq2seqAgent(Agent):
             self.longest_label = 1
             self.truncate = opt['truncate']
             self.attention = opt['attention']
+            self.dropout = opt['dropout']
 
             # set up tensors
             self.zeros = torch.zeros(self.num_layers, 1, hsz)
@@ -166,19 +167,17 @@ class Seq2seqAgent(Agent):
                     self.lt.weight.data[self.dict[w]] = Glove.vectors[Glove.stoi[w]]
             # encoder captures the input text
             enc_class = Seq2seqAgent.ENC_OPTS[opt['encoder']]
-            self.encoder = enc_class(emb, hsz, opt['numlayers'], dropout=opt['dropout'])
+            self.encoder = enc_class(emb, hsz, opt['numlayers'], dropout=self.dropout)
             # decoder produces our output states
             if opt['decoder'] == 'shared':
                 self.decoder = self.encoder
             elif opt['decoder'] == 'same':
-                self.decoder = enc_class(emb, hsz, opt['numlayers'], dropout=opt['dropout'])
+                self.decoder = enc_class(emb, hsz, opt['numlayers'], dropout=self.dropout)
             else:
                 dec_class = Seq2seqAgent.ENC_OPTS[opt['decoder']]
-                self.decoder = dec_class(emb, hsz, opt['numlayers'], dropout=opt['dropout'])
+                self.decoder = dec_class(emb, hsz, opt['numlayers'], dropout=self.dropout)
             # linear layer helps us produce outputs from final decoder state
             self.h2o = nn.Linear(hsz, len(self.dict))
-            # dropout on the linear layer helps us generalize
-            self.dropout = nn.Dropout(opt['dropout'])
 
             if not self.attention:
                 pass
@@ -268,7 +267,6 @@ class Seq2seqAgent(Agent):
         self.encoder.cuda()
         self.decoder.cuda()
         self.h2o.cuda()
-        self.dropout.cuda()
         if not self.attention:
             pass 
         elif self.attention.startswith('local'):
@@ -282,14 +280,13 @@ class Seq2seqAgent(Agent):
             self.attn.cuda()
             self.attn_combine.cuda()
 
-    def hidden_to_idx(self, hidden, dropout=False):
+    def hidden_to_idx(self, hidden, is_training=False):
         """Convert hidden state vectors into indices into the dictionary."""
         if hidden.size(0) > 1:
             raise RuntimeError('bad dimensions of tensor:', hidden)
         hidden = hidden.squeeze(0)
         scores = self.h2o(hidden)
-        if dropout:
-            scores = self.dropout(scores)
+        scores = F.dropout(self.dropout(scores), p=self.dropout, train=is_training)
         scores = F.log_softmax(scores)
         _max_score, idx = scores.max(1)
         return idx, scores
@@ -331,15 +328,14 @@ class Seq2seqAgent(Agent):
         self.episode_done = observation['episode_done']
         return observation
 
-    def _encode(self, xs, dropout=False):
+    def _encode(self, xs, is_training=False):
         """Call encoder and return output and hidden states."""
         batchsize = len(xs)
 
         # first encode context
         xes = self.lt(xs)
 
-        if dropout:
-            xes = self.dropout(xes)
+        xes = F.dropout(xes, p=self.dropout, training=is_training)
         # project from emb_size to hidden_size dimensions
         xes = xes.transpose(0, 1)
         if self.zeros.size(1) != batchsize:
@@ -409,12 +405,13 @@ class Seq2seqAgent(Agent):
             output = self._apply_attention(xes, encoder_output, h, attn_mask) if self.attention else xes
 
             output, hidden = self.decoder(output, hidden)
-            preds, scores = self.hidden_to_idx(output, dropout=True)
+            preds, scores = self.hidden_to_idx(output, is_training=True)
             y = ys.select(1, i)
             loss += self.criterion(scores, y)
             # use the true token as the next input instead of predicted
             # this produces a biased prediction but better training
             xes = self.lt(y).unsqueeze(0)
+            xes = F.dropout(xes, p=self.dropout, training=True)
             for b in range(batchsize):
                 # convert the output scores to tokens
                 token = self.v2t([preds.data[b]])
@@ -449,7 +446,7 @@ class Seq2seqAgent(Agent):
             output = self._apply_attention(xes, encoder_output, h, attn_mask) if self.attention else xes 
 
             output, hidden = self.decoder(output, hidden)
-            preds, scores = self.hidden_to_idx(output, dropout=False)
+            preds, scores = self.hidden_to_idx(output, is_training=False)
 
             xes = self.lt(preds.unsqueeze(0))
             max_len += 1
@@ -523,7 +520,7 @@ class Seq2seqAgent(Agent):
                 output, (cands_hn, cands_cn) = self.decoder(output, (cands_hn, cands_cn))
             else:
                 output, cands_hn = self.decoder(output, cands_hn)
-            preds, scores = self.hidden_to_idx(output, dropout=False)
+            preds, scores = self.hidden_to_idx(output, is_training=False)
             cs = cview.select(1, i)
             non_nulls = cs.ne(self.NULL_IDX)
             cand_lengths += non_nulls.long()
@@ -552,7 +549,9 @@ class Seq2seqAgent(Agent):
         text_cand_inds = None
         is_training = ys is not None
 
-        encoder_output, hidden = self._encode(xs, dropout=is_training)
+        self.encoder.train(mode=is_training)
+        self.decoder.train(mode=is_training)
+        encoder_output, hidden = self._encode(xs, is_training)
 
 
         # next we use END as an input to kick off our decoder
