@@ -601,7 +601,7 @@ class Seq2seqAgent(Agent):
             if self.truncate:
                 # shrink xs to to limit batch computation
                 min_x_len = min([len(x) for x in parsed])
-                max_x_len = min(min_x_len + 12, max_x_len, 48)
+                max_x_len = min(min_x_len + 12, max_x_len, 24)
                 parsed = [x[-max_x_len:] for x in parsed]
             xs = torch.LongTensor(batchsize, max_x_len).fill_(0)
             # pack the data to the right side of the tensor for this model
@@ -629,7 +629,7 @@ class Seq2seqAgent(Agent):
             if self.truncate:
                 # shrink ys to to limit batch computation
                 min_y_len = min(len(y) for y in parsed)
-                max_y_len = min(min_y_len + 12, max_y_len, 48)
+                max_y_len = min(min_y_len + 12, max_y_len, 24)
                 parsed = [y[:max_y_len] for y in parsed]
             ys = torch.LongTensor(batchsize, max_y_len).fill_(0)
             for i, y in enumerate(parsed):
