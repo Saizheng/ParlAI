@@ -111,7 +111,7 @@ class DictionaryAgent(Agent):
            '--dict-starttoken', default=DictionaryAgent.default_start,
            help='token for starting sentence generation, if needed')
         dictionary.add_argument(
-            '--dict-maxexs', default=1000000, type=int,
+            '--dict-maxexs', default=100000000, type=int,
             help='max number of examples to build dict on')
         return dictionary
 
