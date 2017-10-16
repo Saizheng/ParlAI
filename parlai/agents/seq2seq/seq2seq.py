@@ -286,7 +286,7 @@ class Seq2seqAgent(Agent):
             raise RuntimeError('bad dimensions of tensor:', hidden)
         hidden = hidden.squeeze(0)
         scores = self.h2o(hidden)
-        scores = F.dropout(self.dropout(scores), p=self.dropout, train=is_training)
+        scores = F.dropout(scores, p=self.dropout, training=is_training)
         scores = F.log_softmax(scores)
         _max_score, idx = scores.max(1)
         return idx, scores
