@@ -100,6 +100,8 @@ class Seq2seqAgent(Agent):
             self.answers = shared['answers']
             self.START = shared['START']
             self.END = shared['END']
+            self.truncate = shared['truncate']
+            self.dict = shared['dict']
         else:
             # this is not a shared instance of this class, so do full
             # initialization. if shared is set, only set up shared members.
@@ -152,7 +154,7 @@ class Seq2seqAgent(Agent):
             self.xs = torch.LongTensor(1, 1)
             self.ys = torch.LongTensor(1, 1)
             self.cands = torch.LongTensor(1, 1, 1)
-            self.cand_scores = torch.FloatTensor(1)
+            self.cand_scores = torch.LongTensor(1)
             self.cand_lengths = torch.LongTensor(1)
 
             # set up modules
@@ -177,7 +179,7 @@ class Seq2seqAgent(Agent):
                 dec_class = Seq2seqAgent.ENC_OPTS[opt['decoder']]
                 self.decoder = dec_class(emb, hsz, opt['numlayers'], dropout=self.dropout)
             # linear layer helps us produce outputs from final decoder state
-            self.h2o = nn.Linear(hsz, len(self.dict))
+            self.h2o = nn.Linear(hsz, len(self.dict) - 1)
 
             if not self.attention:
                 pass
@@ -311,6 +313,8 @@ class Seq2seqAgent(Agent):
         shared['answers'] = self.answers
         shared['START'] = self.START
         shared['END'] = self.END
+        shared['truncate'] = self.truncate
+        shared['dict'] = self.dict
         return shared
 
     def observe(self, observation):
@@ -323,6 +327,13 @@ class Seq2seqAgent(Agent):
             # if the last example wasn't the end of an episode, then we need to
             # recall what was said in that example
             prev_dialogue = self.observation['text']
+            truncate_step = 24
+            if self.truncate:
+                obv_parsed = [self.dict[w] for w in self.parse(observation['text'])]
+                len_cur = len(obv_parsed)
+                len_left = truncate_step - len_cur
+                prev_dialogue = ' '.join([self.dict[w] for w in self.parse(prev_dialogue)][-len_left:]) if len_left > 0 else ''
+                observation['text'] = ' '.join(obv_parsed) if len_left > 0 else ' '.join(obv_parsed[-truncate_step:])
             observation['text'] = prev_dialogue + '\n' + observation['text']
         self.observation = observation
         self.episode_done = observation['episode_done']
@@ -407,14 +418,14 @@ class Seq2seqAgent(Agent):
             output, hidden = self.decoder(output, hidden)
             preds, scores = self.hidden_to_idx(output, is_training=True)
             y = ys.select(1, i)
-            loss += self.criterion(scores, y)
+            loss += self.criterion(scores*y.ne(0).float().unsqueeze(1), (y-1)*y.ne(0).long())
             # use the true token as the next input instead of predicted
             # this produces a biased prediction but better training
             xes = self.lt(y).unsqueeze(0)
             xes = F.dropout(xes, p=self.dropout, training=True)
             for b in range(batchsize):
                 # convert the output scores to tokens
-                token = self.v2t([preds.data[b]])
+                token = self.v2t([(preds+1).data[b]])
                 output_lines[b].append(token)
         
         self.loss += loss.data.cpu().numpy()[0]
@@ -448,12 +459,12 @@ class Seq2seqAgent(Agent):
             output, hidden = self.decoder(output, hidden)
             preds, scores = self.hidden_to_idx(output, is_training=False)
 
-            xes = self.lt(preds.unsqueeze(0))
+            xes = self.lt((preds+1).unsqueeze(0))
             max_len += 1
             for b in range(batchsize):
                 if not done[b]:
                     # only add more tokens for examples that aren't done yet
-                    token = self.v2t([preds.data[b]])
+                    token = self.v2t([(preds+1).data[b]])
                     if token == self.END:
                         # if we produced END, we're done
                         done[b] = True
@@ -524,7 +535,7 @@ class Seq2seqAgent(Agent):
             cs = cview.select(1, i)
             non_nulls = cs.ne(self.NULL_IDX)
             cand_lengths += non_nulls.long()
-            score_per_cand = torch.gather(scores, 1, cs.unsqueeze(1))
+            score_per_cand = torch.gather(scores, 1, ((cs-1)*cs.ne(0).long()).unsqueeze(1))
             cand_scores += score_per_cand.squeeze() * non_nulls.float()
             cands_xes = self.lt(cs).unsqueeze(0)
 
@@ -727,8 +738,9 @@ class Seq2seqAgent(Agent):
             # map the predictions back to non-empty examples in the batch
             # we join with spaces since we produce tokens one at a time
             curr = batch_reply[valid_inds[i]]
-            curr['text'] = ' '.join(c for c in predictions[i] if c != self.END
-                                    and c != self.dict.null_token)
+            #curr['text'] = ' '.join(c for c in predictions[i] if c != self.END
+            #                        and c != self.dict.null_token)
+            curr['text'] = ' '.join(c for c in (predictions[i][:predictions[i].index(self.END)] if self.END in predictions[i] else predictions[i]))
             curr_pred = curr['text']
             if labels is not None:
                 self.answers[valid_inds[i]] = labels[i]
