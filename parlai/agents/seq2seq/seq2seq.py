@@ -525,6 +525,8 @@ class Seq2seqAgent(Agent):
         cand_lengths = Variable(
                     self.cand_lengths.resize_(cview.size(0)).fill_(0))
 
+        non_end = cview.select(1, i)
+        pdb.set_trace()
         for i in range(cview.size(1)):
             output = self._apply_attention(cands_xes, cands_encoder_output, cands_hn, cands_attn_mask) if self.attention else cand_exs
             if type(self.decoder) == nn.LSTM:
@@ -596,10 +598,10 @@ class Seq2seqAgent(Agent):
         #    exs = [ex for ex in observations if ('text' in ex and ('labels' in ex or 'label_candidates' in ex))]
         #else:
         #    exs = [ex for ex in observations if 'text' in ex]
-        exs = [ex for ex in observations if ('text' in ex and ('labels' in ex or 'label_candidates' in ex))]
+        exs = [ex for ex in observations if ('text' in ex and ('labels' in ex or 'eval_labels' in ex))]
 
         # the indices of the valid (non-empty) tensors
-        valid_inds = [i for i, ex in enumerate(observations) if ('text' in ex and ('labels' in ex or 'label_candidates' in ex))]
+        valid_inds = [i for i, ex in enumerate(observations) if ('text' in ex and ('labels' in ex or 'eval_labels' in ex))]
         #valid_inds = [i for i, ex in enumerate(observations) if 'text' in ex]
 
         # set up the input tensors
