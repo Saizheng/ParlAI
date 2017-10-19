@@ -154,7 +154,7 @@ class Seq2seqAgent(Agent):
             self.xs = torch.LongTensor(1, 1)
             self.ys = torch.LongTensor(1, 1)
             self.cands = torch.LongTensor(1, 1, 1)
-            self.cand_scores = torch.LongTensor(1)
+            self.cand_scores = torch.FloatTensor(1)
             self.cand_lengths = torch.LongTensor(1)
 
             # set up modules
@@ -525,10 +525,10 @@ class Seq2seqAgent(Agent):
         cand_lengths = Variable(
                     self.cand_lengths.resize_(cview.size(0)).fill_(0))
 
-        non_end = cview.select(1, i)
-        pdb.set_trace()
+        #non_end = cview.select(1, i)
+        #pdb.set_trace()
         for i in range(cview.size(1)):
-            output = self._apply_attention(cands_xes, cands_encoder_output, cands_hn, cands_attn_mask) if self.attention else cand_exs
+            output = self._apply_attention(cands_xes, cands_encoder_output, cands_hn, cands_attn_mask) if self.attention else cands_xes
             if type(self.decoder) == nn.LSTM:
                 output, (cands_hn, cands_cn) = self.decoder(output, (cands_hn, cands_cn))
             else:
