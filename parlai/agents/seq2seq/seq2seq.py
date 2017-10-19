@@ -7,7 +7,7 @@
 from parlai.core.agents import Agent
 from parlai.core.dict import DictionaryAgent
 from parlai.core.metrics import _f1_score
-
+from torch.nn.utils.rnn import pad_packed_sequence, pack_padded_sequence
 from torch.autograd import Variable
 from torch import optim
 import torch.nn as nn
@@ -342,23 +342,26 @@ class Seq2seqAgent(Agent):
     def _encode(self, xs, is_training=False):
         """Call encoder and return output and hidden states."""
         batchsize = len(xs)
+        x_lens = [x for x in torch.sum((xs>0).int(), dim=1).data]
 
         # first encode context
         xes = self.lt(xs)
 
         xes = F.dropout(xes, p=self.dropout, training=is_training)
         # project from emb_size to hidden_size dimensions
-        xes = xes.transpose(0, 1)
         if self.zeros.size(1) != batchsize:
             self.zeros.resize_(self.num_layers, batchsize, self.hidden_size).fill_(0)
         h0 = Variable(self.zeros)
+        xes_packed = pack_padded_sequence(xes.transpose(0, 1), x_lens)
 
         if type(self.encoder) == nn.LSTM:
-            encoder_output, hidden = self.encoder(xes, (h0, h0))
+            encoder_output_packed, hidden = self.encoder(xes_packed, (h0, h0))
+            encoder_output, _ = pad_packed_sequence(encoder_output_packed)
             if type(self.decoder) != nn.LSTM:
                 hidden = hidden[0]
         else:
-            encoder_output, hidden = self.encoder(xes, h0)
+            encoder_output_packed, hidden = self.encoder(xes_packed, h0)
+            encoder_output, _ = pad_packed_sequence(encoder_output_packed)
             if type(self.decoder) == nn.LSTM:
                 hidden = (hidden, h0)
         encoder_output = encoder_output.transpose(0, 1)
@@ -384,6 +387,7 @@ class Seq2seqAgent(Agent):
             attn_weights = F.softmax(attn_w_premask * attn_mask.float() - (1 - attn_mask.float()) * 1e20)
 
         if self.attention.startswith('general'):
+            pdb.set_trace()
             hidden_expand = hidden[-1].unsqueeze(1)
             attn_w_premask = torch.bmm(self.attn(hidden_expand), encoder_output.transpose(1, 2)).squeeze(1)
             attn_weights = F.softmax(attn_w_premask * attn_mask.float() - (1 - attn_mask.float()) * 1e20)
@@ -618,10 +622,13 @@ class Seq2seqAgent(Agent):
                 parsed = [x[-max_x_len:] for x in parsed]
             xs = torch.LongTensor(batchsize, max_x_len).fill_(0)
             # pack the data to the right side of the tensor for this model
+            x_lens = [len(x) for x in parsed]
+            ind_sorted = sorted(range(len(x_lens)), key=lambda k: x_lens[k])
+            parsed = [parsed[k] for k in ind_sorted][::-1]
             for i, x in enumerate(parsed):
                 offset = max_x_len - len(x)
                 for j, idx in enumerate(x):
-                    xs[i][j + offset] = idx
+                    xs[i][j] = idx
             if self.use_cuda:
                 # copy to gpu
                 self.xs.resize_(xs.size())
