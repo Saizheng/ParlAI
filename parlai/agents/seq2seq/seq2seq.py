@@ -597,61 +597,56 @@ class Seq2seqAgent(Agent):
 
     def batchify(self, observations):
         """Convert a list of observations into input & target tensors."""
-        # valid examples
-        #if any(['eval_labels' in obs for obs in observations]):
-        #    exs = [ex for ex in observations if ('text' in ex and ('labels' in ex or 'label_candidates' in ex))]
-        #else:
-        #    exs = [ex for ex in observations if 'text' in ex]
-        exs = [ex for ex in observations if ('text' in ex and ('labels' in ex or 'eval_labels' in ex))]
-
-        # the indices of the valid (non-empty) tensors
-        valid_inds = [i for i, ex in enumerate(observations) if ('text' in ex and ('labels' in ex or 'eval_labels' in ex))]
-        #valid_inds = [i for i, ex in enumerate(observations) if 'text' in ex]
+        def valid(obs):
+            # check if this is an example our model should actually process
+            return 'text' in obs and ('labels' in obs or 'eval_labels' in obs)
+        # valid examples and their indices
+        try:
+            valid_inds, exs = zip(*[(i, ex) for i, ex in
+                                    enumerate(observations) if valid(ex)])
+        except ValueError:
+            # zero examples to process in this batch, so zip failed to unpack
+            return None, None, None, None, None, None
 
         # set up the input tensors
         batchsize = len(exs)
-        # tokenize the text
-        xs = None
-        if batchsize > 0:
-            parsed = [self.parse(ex['text']) for ex in exs]
-            max_x_len = max([len(x) for x in parsed])
-            if self.truncate:
-                # shrink xs to to limit batch computation
-                min_x_len = min([len(x) for x in parsed])
-                max_x_len = min(min_x_len + 12, max_x_len, 24)
-                parsed = [x[-max_x_len:] for x in parsed]
-            xs = torch.LongTensor(batchsize, max_x_len).fill_(0)
-            # pack the data to the right side of the tensor for this model
-            x_lens = [len(x) for x in parsed]
-            ind_sorted = sorted(range(len(x_lens)), key=lambda k: x_lens[k])
-            parsed = [parsed[k] for k in ind_sorted][::-1]
-            for i, x in enumerate(parsed):
-                offset = max_x_len - len(x)
-                for j, idx in enumerate(x):
-                    xs[i][j] = idx
-            if self.use_cuda:
-                # copy to gpu
-                self.xs.resize_(xs.size())
-                self.xs.copy_(xs, async=True)
-                xs = Variable(self.xs)
-            else:
-                xs = Variable(xs)
+
+        # `x` text is already tokenized and truncated
+        parsed = [self.parse(ex['text']) for ex in exs]
+        x_lens = [len(x) for x in parsed]
+        ind_sorted = sorted(range(len(x_lens)), key=lambda k: -x_lens[k])
+
+        exs = [exs[k] for k in ind_sorted]
+        valid_inds = [valid_inds[k] for k in ind_sorted]
+        parsed = [parsed[k] for k in ind_sorted]
+
+        max_x_len = max([len(x) for x in parsed])
+        xs = torch.LongTensor(batchsize, max_x_len).fill_(self.NULL_IDX)
+        # right-padded with zeros
+        for i, x in enumerate(parsed):
+            for j, idx in enumerate(x):
+                xs[i][j] = idx
+        if self.use_cuda:
+            # copy to gpu
+            self.xs.resize_(xs.size())
+            self.xs.copy_(xs, async=True)
+            xs = Variable(self.xs)
+        else:
+            xs = Variable(xs)
 
         # set up the target tensors
         ys = None
         labels = None
-        if batchsize > 0 and any(['labels' in ex for ex in exs]):
+        if any(['labels' in ex for ex in exs]):
             # randomly select one of the labels to update on, if multiple
             # append END to each label
             labels = [random.choice(ex.get('labels', [''])) for ex in exs]
-            parsed = [self.parse(y + ' ' + self.END) for y in labels]
+            parsed = [self.parse(y + ' ' + self.END) for y in labels if y]
             max_y_len = max(len(y) for y in parsed)
-            if self.truncate:
-                # shrink ys to to limit batch computation
-                min_y_len = min(len(y) for y in parsed)
-                max_y_len = min(min_y_len + 12, max_y_len, 24)
-                parsed = [y[:max_y_len] for y in parsed]
-            ys = torch.LongTensor(batchsize, max_y_len).fill_(0)
+            if self.truncate > 0 and max_y_len > self.truncate:
+                parsed = [y[:self.truncate] for y in parsed]
+                max_y_len = self.truncate
+            ys = torch.LongTensor(batchsize, max_y_len).fill_(self.NULL_IDX)
             for i, y in enumerate(parsed):
                 for j, idx in enumerate(y):
                     ys[i][j] = idx
@@ -670,20 +665,20 @@ class Seq2seqAgent(Agent):
             # only do ranking when no targets available and ranking flag set
             parsed = []
             valid_cands = []
-            for i in valid_inds:
+            for i, v in enumerate(valid_inds):
                 if 'label_candidates' in observations[i]:
                     # each candidate tuple is a pair of the parsed version and
                     # the original full string
                     cs = list(observations[i]['label_candidates'])
                     parsed.append([self.parse(c) for c in cs])
-                    valid_cands.append((i, cs))
+                    valid_cands.append((i, v, cs))
             if len(parsed) > 0:
                 # TODO: store lengths of cands separately, so don't have zero
-                # padding for varying number of cands per example
+                #       padding for varying number of cands per example
                 # found cands, pack them into tensor
                 max_c_len = max(max(len(c) for c in cs) for cs in parsed)
                 max_c_cnt = max(len(cs) for cs in parsed)
-                cands = torch.LongTensor(len(parsed), max_c_cnt, max_c_len).fill_(0)
+                cands = torch.LongTensor(len(parsed), max_c_cnt, max_c_len).fill_(self.NULL_IDX)
                 for i, cs in enumerate(parsed):
                     for j, c in enumerate(cs):
                         for k, idx in enumerate(c):
@@ -695,11 +690,6 @@ class Seq2seqAgent(Agent):
                     cands = Variable(self.cands)
                 else:
                     cands = Variable(cands)
-
-        #if valid_cands:
-        #    valid_cand_inds = [vc[0] for vc in valid_cands]
-        #    vci = [int(i) for (i, ii) in enumerate(valid_inds) if ii in valid_cand_inds]
-        #    xs = xs[vci, :]
 
         return xs, ys, labels, valid_inds, cands, valid_cands
 
@@ -759,7 +749,7 @@ class Seq2seqAgent(Agent):
         if text_cand_inds is not None:
             for i in range(len(valid_cands)):
                 order = text_cand_inds[i]
-                batch_idx, curr_cands = valid_cands[i]
+                _ , batch_idx, curr_cands = valid_cands[i]
                 curr = batch_reply[batch_idx]
                 curr['text_candidates'] = [curr_cands[idx] for idx in order
                                            if idx < len(curr_cands)]
