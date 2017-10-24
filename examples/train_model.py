@@ -136,6 +136,7 @@ def main():
     impatience = 0
     saved = False
     valid_world = None
+    loss_best = 1e10
     while True:
         world.parley()
         parleys += 1
@@ -187,9 +188,15 @@ def main():
             print(log)
             try:
                 if opt['batchsize'] == 1:
-                    world.agents[1].report_loss()
+                    loss_record = world.agents[1].report_loss()
+                    if loss_record < loss_best:
+                        loss_best = loss_record
+                    print('Best loss is {}.'.format(loss_best))
                 else:
-                    world.world.agents[1].report_loss()
+                    loss_record = world.world.agents[1].report_loss()
+                    if loss_record < loss_best:
+                        loss_best = loss_record
+                    print('Best loss is {}.'.format(loss_best))
             except:
                 pass
             log_time.reset()
@@ -199,8 +206,8 @@ def main():
             #validate_time.reset()
             #agent.check_hidden = True
             #continue
-            world.save_agents()
-            saved = True
+            #world.save_agents()
+            #saved = True
 
             valid_report, valid_world = run_eval(
                 agent, opt, 'valid', opt['validation_max_exs'],
@@ -208,6 +215,9 @@ def main():
             #if valid_report[opt['validation_metric']] > best_valid:
             #    best_valid = valid_report[opt['validation_metric']]
             if valid_report['hits@k'][1] > best_valid:
+                world.save_agents()
+                saved = True
+
                 best_valid = valid_report['hits@k'][1]
                 impatience = 0
                 print('[ new best {}: {} ]'.format(
