@@ -62,6 +62,22 @@ def run_eval(agent, opt, datatype, max_exs=-1, write_log=True, valid_world=None)
             # note this max_exs is approximate--some batches won't always be
             # full depending on the structure of the data
             break
+    perp = None
+    if opt['batchsize'] > 1:
+        if hasattr(valid_world.world.agents[1], 'log_perp'):
+            log_perp = valid_world.world.agents[1].log_perp
+            n_log_perp = valid_world.world.agents[1].n_log_perp
+            valid_world.world.agents[1].reset_log_perp()
+            perp = math.exp(log_perp/n_log_perp)
+            print("the eval perplexity is {}".format(perp))
+    else:
+        if hasattr(valid_world.agents[1], 'log_perp'):
+            log_perp = valid_world.agents[1].log_perp
+            n_log_perp = valid_world.agents[1].n_log_perp
+            valid_world.agents[1].reset_log_perp()
+            perp = math.exp(log_perp/n_log_perp)
+            print("the eval perplexity is {}".format(perp))
+
     valid_report = valid_world.report()
 
     metrics = datatype + ':' + str(valid_report)
@@ -70,9 +86,10 @@ def run_eval(agent, opt, datatype, max_exs=-1, write_log=True, valid_world=None)
         # Write out metrics
         f = open(opt['model_file'] + '.' + datatype, 'a+')
         f.write(metrics + '\n')
+        f.write('CURRENT PERP: {}'.format(perp))
         f.close()
 
-    return valid_report, valid_world
+    return valid_report, valid_world, perp
 
 
 def main():
@@ -133,6 +150,8 @@ def main():
     max_exs = opt['num_epochs'] * len(world)
     max_parleys = math.ceil(max_exs / opt['batchsize'])
     best_valid = 0
+    #TODO: this best_valid is only for perplexity
+    #best_valid = 1e10
     impatience = 0
     saved = False
     valid_world = None
@@ -209,15 +228,18 @@ def main():
             #world.save_agents()
             #saved = True
 
-            valid_report, valid_world = run_eval(
+            valid_report, valid_world, eval_perp = run_eval(
                 agent, opt, 'valid', opt['validation_max_exs'],
                 valid_world=valid_world)
             #if valid_report[opt['validation_metric']] > best_valid:
             #    best_valid = valid_report[opt['validation_metric']]
             if valid_report['hits@k'][1] > best_valid:
+            #if eval_perp and eval_perp < best_valid:
+                print('NEW BEST PERP: {}'.format(eval_perp))
                 world.save_agents()
                 saved = True
 
+                #best_valid = eval_perp
                 best_valid = valid_report['hits@k'][1]
                 impatience = 0
                 print('[ new best {}: {} ]'.format(

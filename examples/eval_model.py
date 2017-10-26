@@ -14,7 +14,7 @@ or
 from parlai.core.params import ParlaiParser
 from parlai.core.agents import create_agent
 from parlai.core.worlds import create_task
-
+import math
 import random
 
 def main():
@@ -37,7 +37,10 @@ def main():
     else:
         agent = create_agent(opt)
         world = create_task(opt, agent)
-        agent.teacher = world.agents[0]
+        if opt['batchsize'] > 1:
+            agent.teacher = world.world.agents[0]
+        else:
+            agent.teacher = world.agents[0]
 
     # Show some example dialogs:
     for k in range(int(opt['num_examples'])):
@@ -49,6 +52,23 @@ def main():
         if world.epoch_done():
             print("EPOCH DONE")
             break
+
+    perp = None
+    if opt['batchsize'] > 1:
+        if hasattr(world.world.agents[1], 'log_perp'):
+            log_perp = world.world.agents[1].log_perp
+            n_log_perp = world.world.agents[1].n_log_perp
+            world.world.agents[1].reset_log_perp()
+            perp = math.exp(log_perp/n_log_perp)
+            print("the eval perplexity is {}".format(perp))
+    else:
+        if hasattr(world.agents[1], 'log_perp'):
+            log_perp = world.agents[1].log_perp
+            n_log_perp = world.agents[1].n_log_perp
+            world.agents[1].reset_log_perp()
+            perp = math.exp(log_perp/n_log_perp)
+            print("the eval perplexity is {}".format(perp))
+
     world.shutdown()
 
 if __name__ == '__main__':
