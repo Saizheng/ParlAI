@@ -92,6 +92,10 @@ class Seq2seqAgent(Agent):
                                 'Any member of torch.optim is valid and will '
                                 'be used with default params except learning '
                                 'rate (as specified by -lr).')
+        agent.add_argument('--personachat_interact', action='store_true',
+                           help='interact during validation')
+
+
 
     def __init__(self, opt, shared=None):
         """Set up model if shared params not set, otherwise no work to do."""
@@ -108,6 +112,8 @@ class Seq2seqAgent(Agent):
 
             # self.answer is tracking the last output from model itself.
             self.answers = [None] * opt['batchsize']
+            self.log_perp = 0.
+            self.n_log_perp = 0.
 
             # check for cuda
             self.use_cuda = not opt.get('no_cuda') and torch.cuda.is_available()
@@ -153,6 +159,7 @@ class Seq2seqAgent(Agent):
             self.zeros = torch.zeros(self.num_layers, 1, hsz)
             self.xs = torch.LongTensor(1, 1)
             self.ys = torch.LongTensor(1, 1)
+            self.zs = torch.LongTensor(1, 1)
             self.cands = torch.LongTensor(1, 1, 1)
             self.cand_scores = torch.FloatTensor(1)
             self.cand_lengths = torch.LongTensor(1)
@@ -261,6 +268,7 @@ class Seq2seqAgent(Agent):
         self.zeros = self.zeros.cuda(async=True)
         self.xs = self.xs.cuda(async=True)
         self.ys = self.ys.cuda(async=True)
+        self.zs = self.zs.cuda(async=True)
         self.cands = self.cands.cuda(async=True)
         self.cand_scores = self.cand_scores.cuda(async=True)
         self.cand_lengths = self.cand_lengths.cuda(async=True)
@@ -308,6 +316,10 @@ class Seq2seqAgent(Agent):
         self.observation = None
         self.episode_done = True
 
+    def reset_log_perp(self):
+        self.log_perp = 0.
+        self.n_log_perp = 0.
+
     def share(self):
         shared = super().share()
         shared['answers'] = self.answers
@@ -347,7 +359,7 @@ class Seq2seqAgent(Agent):
         # first encode context
         xes = self.lt(xs)
 
-        xes = F.dropout(xes, p=self.dropout, training=is_training)
+        xes = F.dropout(xes, p=2*self.dropout, training=is_training)
         # project from emb_size to hidden_size dimensions
         if self.zeros.size(1) != batchsize:
             self.zeros.resize_(self.num_layers, batchsize, self.hidden_size).fill_(0)
@@ -376,7 +388,8 @@ class Seq2seqAgent(Agent):
             if encoder_output.size(1) > self.max_length:
                 offset = encoder_output.size(1) - self.max_length
                 encoder_output = encoder_output.narrow(1, offset, self.max_length)
-
+        
+        hidden = tuple(F.dropout(h, p=2*self.dropout, training=is_training) for h in hidden)
         return encoder_output, hidden
 
     def _apply_attention(self, xes, encoder_output, hidden, attn_mask=None):
@@ -387,7 +400,6 @@ class Seq2seqAgent(Agent):
             attn_weights = F.softmax(attn_w_premask * attn_mask.float() - (1 - attn_mask.float()) * 1e20)
 
         if self.attention.startswith('general'):
-            pdb.set_trace()
             hidden_expand = hidden[-1].unsqueeze(1)
             attn_w_premask = torch.bmm(self.attn(hidden_expand), encoder_output.transpose(1, 2)).squeeze(1)
             attn_weights = F.softmax(attn_w_premask * attn_mask.float() - (1 - attn_mask.float()) * 1e20)
@@ -444,14 +456,38 @@ class Seq2seqAgent(Agent):
 
         return output_lines
 
-    def _decode_only(self, batchsize, xes, ys, encoder_output, hidden, attn_mask):
+    def _decode_perp(self, batchsize, xes, ys, encoder_output, hidden, attn_mask, zs):
+        # calculate the perplexity
+        log_perp = 0.
+        for i in range(zs.size(1)):
+            if type(self.decoder) == nn.LSTM:
+                h = hidden[0]
+            if self.attention:
+                output = self._apply_attention(xes, encoder_output, h, attn_mask)
+            else:
+                output = xes
+
+            output, hidden = self.decoder(output, hidden)
+            preds, scores = self.hidden_to_idx(output, is_training=False)
+            y = zs.select(1, i)
+            log_perp += scores[[i for i in range(len(y))], (y-1)*y.ne(self.NULL_IDX).long()]*y.ne(self.NULL_IDX).float()
+            # use the true token as the next input instead of predicted
+            # this produces a biased prediction but better training
+            xes = self.lt(y).unsqueeze(0)
+        n_zs = zs.ne(self.NULL_IDX).float().sum()
+        log_perp = (-log_perp).sum()
+        self.log_perp += log_perp.cpu().data.numpy()[0]
+        self.n_log_perp += n_zs.cpu().data.numpy()[0]
+
+
+    def _decode_only(self, batchsize, xes, ys, encoder_output, hidden, attn_mask, zs):
         # just produce a prediction without training the model
+
         done = [False for _ in range(batchsize)]
         total_done = 0
         max_len = 0
 
         output_lines = [[] for _ in range(batchsize)]
-
         # now, generate a response from scratch
         while(total_done < batchsize) and max_len < self.longest_label:
             # keep producing tokens until we hit END or max length for each
@@ -556,7 +592,7 @@ class Seq2seqAgent(Agent):
 
         return text_cand_inds
 
-    def predict(self, xs, ys=None, cands=None):
+    def predict(self, xs, ys=None, cands=None, zs=None):
         """Produce a prediction from our model.
 
         Update the model using the targets if available, otherwise rank
@@ -591,7 +627,9 @@ class Seq2seqAgent(Agent):
                                                         encoder_output, hidden, attn_mask)
 
             output_lines = self._decode_only(batchsize, xes, ys,
-                                             encoder_output, hidden, attn_mask)
+                                             encoder_output, hidden, attn_mask, zs)
+            self._decode_perp(batchsize, xes, ys,
+                              encoder_output, hidden, attn_mask, zs)
 
         return output_lines, text_cand_inds
 
@@ -606,7 +644,7 @@ class Seq2seqAgent(Agent):
                                     enumerate(observations) if valid(ex)])
         except ValueError:
             # zero examples to process in this batch, so zip failed to unpack
-            return None, None, None, None, None, None
+            return None, None, None, None, None, None, None, None
 
         # set up the input tensors
         batchsize = len(exs)
@@ -658,6 +696,32 @@ class Seq2seqAgent(Agent):
             else:
                 ys = Variable(ys)
 
+
+        # set up the target tensors for validation and test
+        zs = None
+        eval_labels = None
+        if any(['eval_labels' in ex for ex in exs]):
+            # randomly select one of the labels to update on, if multiple
+            # append END to each label
+            eval_labels = [random.choice(ex.get('eval_labels', [''])) for ex in exs]
+            parsed = [self.parse(y + ' ' + self.END) for y in eval_labels if y]
+            max_y_len = max(len(y) for y in parsed)
+            if self.truncate > 0 and max_y_len > self.truncate:
+                parsed = [y[:self.truncate] for y in parsed]
+                max_y_len = self.truncate
+            zs = torch.LongTensor(batchsize, max_y_len).fill_(self.NULL_IDX)
+            for i, y in enumerate(parsed):
+                for j, idx in enumerate(y):
+                    zs[i][j] = idx
+            if self.use_cuda:
+                # copy to gpu
+                self.zs.resize_(zs.size())
+                self.zs.copy_(zs, async=True)
+                zs = Variable(self.zs)
+            else:
+                zs = Variable(zs)
+
+
         # set up candidates
         cands = None
         valid_cands = None
@@ -666,10 +730,10 @@ class Seq2seqAgent(Agent):
             parsed = []
             valid_cands = []
             for i, v in enumerate(valid_inds):
-                if 'label_candidates' in observations[i]:
+                if 'label_candidates' in observations[v]:
                     # each candidate tuple is a pair of the parsed version and
                     # the original full string
-                    cs = list(observations[i]['label_candidates'])
+                    cs = list(observations[v]['label_candidates'])
                     parsed.append([self.parse(c) for c in cs])
                     valid_cands.append((i, v, cs))
             if len(parsed) > 0:
@@ -690,8 +754,7 @@ class Seq2seqAgent(Agent):
                     cands = Variable(self.cands)
                 else:
                     cands = Variable(cands)
-
-        return xs, ys, labels, valid_inds, cands, valid_cands
+        return xs, ys, labels, valid_inds, cands, valid_cands, zs, eval_labels
 
     def batch_act(self, observations):
         batchsize = len(observations)
@@ -703,12 +766,12 @@ class Seq2seqAgent(Agent):
         # e.g. for input [{}, {'text': 'hello'}, {}, {}], valid_inds is [1]
         # since the other three elements had no 'text' field
 
-        if self.opt['datatype'] in ['valid', 'test']:
+        if self.opt['datatype'] in ['valid', 'test'] and self.opt['personachat_interact']:
             print('OBSVS:' + observations[0]['text'])
         #var = input('enter your message: ')
         #observations[0]['text'] = var
 
-        xs, ys, labels, valid_inds, cands, valid_cands = self.batchify(observations)
+        xs, ys, labels, valid_inds, cands, valid_cands, zs, eval_labels = self.batchify(observations)
 
         if xs is None:
             # no valid examples, just return the empty responses we set up
@@ -716,9 +779,9 @@ class Seq2seqAgent(Agent):
 
         # produce predictions either way, but use the targets if available
 
-        predictions, text_cand_inds = self.predict(xs, ys, cands)
+        predictions, text_cand_inds = self.predict(xs, ys, cands, zs)
 
-        if self.opt['datatype'] in ['valid', 'test']:
+        if self.opt['datatype'] in ['valid', 'test'] and self.opt['personachat_interact']:
             print('MODEL:' + ' '.join(predictions[0]))
             symbol_words = ['_s{}_'.format(i) for i in range(20)]
             for s in symbol_words:
