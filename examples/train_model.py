@@ -30,6 +30,7 @@ from parlai.core.utils import Timer
 import build_dict
 import math
 import pdb
+import copy
 
 def run_eval(agent, opt, datatype, max_exs=-1, write_log=True, valid_world=None):
     """Eval on validation/test data.
@@ -40,6 +41,8 @@ def run_eval(agent, opt, datatype, max_exs=-1, write_log=True, valid_world=None)
     - max_exs limits the number of examples if max_exs > 0
     - valid_world can be an existing world which will be reset instead of reinitialized
     """
+    opt = copy.deepcopy(opt)
+    opt['batchsize'] = 128
     print('[ running eval: ' + datatype + ' ]')
     if 'stream' in opt['datatype']:
         datatype += ':stream'
